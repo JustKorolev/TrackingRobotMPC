@@ -200,10 +200,10 @@ class UR10e():
         """
 
         if t == 0.0:
-            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../resources/trajectory.txt")
+            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_4.txt")
             print(f_path)
-            tmp = np.loadtxt(f_path, ndmin=2)
-            self.trajectory = tmp.reshape((self.n, int(tmp.shape[0] / self.n)), order="F")
+            tmp = np.loadtxt(f_path, ndmin=2)[:,1:]
+            self.trajectory = tmp.reshape((self.n, int(tmp.shape[0])), order="F")
 
         id_s = int(round(t / self.dt))
         id_e = int(round(t / self.dt)) + npoints

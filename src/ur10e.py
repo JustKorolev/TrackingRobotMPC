@@ -1,15 +1,21 @@
 from typing import TypedDict
 import numpy as np
 import src.utils as utils
-import matplotlib.pyplot as plt
-import pickle
+import os
 
 class UR10e():
-    def __init__(self):
+    def __init__(self, dt=0.1):
+        # Kinematics
         self.dof = 6
         self.link_lengths = [0.1273, 0.612, 0.5723, 0.163941, 0.1157, 0.0922] # in meters
         self.Tb0 = utils.trans_z(0.1807)  # Base to first joint transformation
         self.T6tp = utils.trans_z(0.11655)
+
+        # Dynamics
+        self.model = self.dynamics
+        self.n = 6
+        self.m = 6
+        self.dt = dt
 
     class DHParameters(TypedDict):
         theta: float  # in degrees
@@ -22,6 +28,13 @@ class UR10e():
         alpha_i_prev: float  # in meters
         d_i: float  # in meters
         theta_i: float  # in degrees
+
+    def get_limits(self):
+        x_lim = 2*np.pi * np.ones(6) # radians
+        u_lim = 0.5 * np.ones(6) # radians/sec
+        delta_u_lim = 1 * np.ones(6) # radians/sec²
+
+        return x_lim, u_lim, delta_u_lim
 
     def get_classical_dh_parameters(self, joint_angles) -> DHParameters:
         alpha = [90, 0, 0, 90, -90, 0]
@@ -150,6 +163,9 @@ class UR10e():
         elif solution_type == 'elbow_down_2':
             return sol3
 
+    def jacobian(self, q):
+        pass
+
     def FK(self, theta_1_6, Ttp_pen = None) -> np.ndarray:
         theta_deg = np.asarray(theta_1_6, dtype=float).reshape(6,)
 
@@ -168,6 +184,47 @@ class UR10e():
             T = T @ Ttp_pen
 
         return T
+
+    def dynamics(self, q, qdot):
+        return q + self.dt * qdot
+
+    def get_trajectory(self, t, npoints):
+        """
+        Provide trajectory to be followed.
+        :param t0: starting time
+        :type t0: float
+        :param npoints: number of trajectory points
+        :type npoints: int
+        :return: trajectory with shape (Nx, npoints)
+        :rtype: np.array
+        """
+
+        if t == 0.0:
+            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../resources/trajectory.txt")
+            print(f_path)
+            tmp = np.loadtxt(f_path, ndmin=2)
+            self.trajectory = tmp.reshape((self.n, int(tmp.shape[0] / self.n)), order="F")
+
+        id_s = int(round(t / self.dt))
+        id_e = int(round(t / self.dt)) + npoints
+        x_r = self.trajectory[:, id_s:id_e]
+
+        return x_r
+
+    def get_initial_pose(self):
+        """
+        Helper function to get a starting state, depending on the dynamics type.
+
+        :return: starting state
+        :rtype: np.ndarray
+        """
+        x0 = np.array([0.000000000000000000e+00,
+                    -1.570796326794896558e+00,
+                    1.570796326794896558e+00,
+                    -1.570796326794896558e+00,
+                    -1.570796326794896558e+00,
+                    0.000000000000000000e+00])
+        return x0
 
 if __name__ == "__main__":
     robot = UR10e()

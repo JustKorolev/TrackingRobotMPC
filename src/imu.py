@@ -25,7 +25,7 @@ except ImportError:
 
 
 class IMUGUI:
-    def __init__(self, root, shared_state, sampling_rate=150):
+    def __init__(self, root, shared_state, sampling_rate=150, mpc_horizon=1):
         self.root = root
         self.root.title("Pixhawk IMU Trajectory Recorder")
         self.shared_state = shared_state
@@ -76,6 +76,7 @@ class IMUGUI:
         self.accel_bias = np.zeros(3)
         self.gravity_direction = np.array([0.0, 0.0, self.G])
         self.sampling_rate = sampling_rate # Hz
+        self.mpc_horizon = mpc_horizon
 
         self.recorded_positions = np.zeros((1, 3))
         self.recorded_times = np.zeros(1)
@@ -91,6 +92,8 @@ class IMUGUI:
         self.raw_gx = deque(maxlen=self.MAX_RAW_SAMPLES)
         self.raw_gy = deque(maxlen=self.MAX_RAW_SAMPLES)
         self.raw_gz = deque(maxlen=self.MAX_RAW_SAMPLES)
+
+        self._stream_thread_running = False
 
         self.build_gui()
         self.worker = threading.Thread(target=self.worker_loop, daemon=True)
@@ -1339,6 +1342,151 @@ class IMUGUI:
         # tracking math will break.
         return data.copy()
 
+    def stream_trajectory_to_window(self):
+        """
+        Continuously stream IMU trajectory data to shared_state.trajectory_window
+        while shared_state.following_trajectory is True.
+        Similar to record_trajectory but appends to a rolling window instead of
+        accumulating data for a fixed duration.
+        """
+        self.set_status("Starting trajectory stream to MPC window...")
+
+        raw_samples = []
+        ekf_rotations = []
+        first_sample_time = None
+        self._attitude_count = 0
+
+        try:
+            while self.running:
+                # Check if we should continue streaming
+                with self.shared_state.lock:
+                    following = self.shared_state.following_trajectory
+
+                if not following:
+                    self.set_status("Trajectory streaming paused (following_trajectory=False)")
+                    time.sleep(0.1)
+                    continue
+
+                sample = self.read_one_sample()
+                if sample is None:
+                    time.sleep(0.001)
+                    continue
+
+                t_us, ax, ay, az, gx, gy, gz = sample
+                t = t_us / 1e6
+
+                if first_sample_time is None:
+                    first_sample_time = t
+
+                elapsed = t - first_sample_time
+                raw_samples.append([elapsed, ax, ay, az, gx, gy, gz])
+                ekf_rotations.append(self._pixhawk_R_enu.copy())
+
+                # Process accumulated samples to generate trajectory points
+                if len(raw_samples) >= 1:
+                    raw_data = np.array(raw_samples)
+                    times = raw_data[:, 0]
+                    accels = raw_data[:, 1:4] - self.accel_bias
+                    gyros = raw_data[:, 4:7] - self.gyro_bias
+
+                    n = len(times)
+                    positions = np.zeros((n, 3))
+                    orientations = np.zeros((n, 3))
+                    velocities = np.zeros((n, 3))
+
+                    use_ekf = (ekf_rotations is not None and len(ekf_rotations) == n
+                                and self._has_pixhawk_attitude)
+
+                    gravity_enu = np.array([0.0, 0.0, self.G])
+
+                    # Initialize quaternion
+                    if use_ekf:
+                        q = self.rotation_matrix_to_quat(ekf_rotations[0])
+                    else:
+                        a0 = accels[0]
+                        a0n = np.linalg.norm(a0)
+                        if a0n > 1e-6:
+                            roll0 = np.arctan2(a0[1], a0[2])
+                            pitch0 = np.arctan2(-a0[0], np.sqrt(a0[1]**2 + a0[2]**2))
+                        else:
+                            roll0, pitch0 = 0.0, 0.0
+                        q = self.euler_to_quat(roll0, pitch0, 0.0)
+
+                    R_enu_0 = self.quat_to_rotation_matrix(q)
+                    R_enu_0_T = R_enu_0.T
+                    orientations[0] = self.quat_to_euler(
+                        self.rotation_matrix_to_quat(np.eye(3)))
+
+                    gyro_bias_online = np.zeros(3)
+                    accel_lp = np.zeros(3)
+
+                    for i in range(1, n):
+                        dt = times[i] - times[i - 1]
+                        if dt <= 0 or dt > 0.5:
+                            positions[i] = positions[i - 1]
+                            orientations[i] = orientations[i - 1]
+                            velocities[i] = velocities[i - 1]
+                            continue
+
+                        is_still = self.is_stationary_sample(accels[i], gyros[i])
+
+                        if is_still:
+                            ba = self.GYRO_BIAS_ALPHA
+                            gyro_bias_online = (1 - ba) * gyro_bias_online + ba * gyros[i]
+
+                        omega = gyros[i] - gyro_bias_online
+
+                        omega_q = np.array([0.0, omega[0], omega[1], omega[2]])
+                        q_dot = 0.5 * self.quat_multiply(q, omega_q)
+                        q = q + q_dot * dt
+                        q = q / np.linalg.norm(q)
+
+                        if use_ekf and not np.array_equal(ekf_rotations[i], ekf_rotations[i - 1]):
+                            q = self.rotation_matrix_to_quat(ekf_rotations[i])
+
+                        R_enu_t = self.quat_to_rotation_matrix(q)
+                        R_nb = R_enu_0_T @ R_enu_t
+
+                        gravity_body = R_enu_t.T @ gravity_enu
+                        a_lin_nav = R_nb @ (accels[i] - gravity_body)
+
+                        orientations[i, 0] = np.arctan2(R_nb[2, 1], R_nb[2, 2])
+                        sinp = np.clip(-R_nb[2, 0], -1.0, 1.0)
+                        orientations[i, 1] = np.arcsin(sinp)
+                        orientations[i, 2] = np.arctan2(R_nb[1, 0], R_nb[0, 0])
+
+                        alpha = self.ACCEL_LP_ALPHA
+                        accel_lp = alpha * a_lin_nav + (1.0 - alpha) * accel_lp
+
+                        accel_use = accel_lp.copy()
+                        accel_use[np.abs(accel_use) < self.ACCEL_DEADBAND] = 0.0
+
+                        if is_still:
+                            velocities[i] = velocities[i - 1]
+                        else:
+                            velocities[i] = velocities[i - 1] + accel_use * dt
+
+                        positions[i] = (positions[i - 1]
+                                        + 0.5 * (velocities[i] + velocities[i - 1]) * dt)
+
+                    # Append the latest trajectory point to the shared window
+                    if n > 0:
+                        latest_pos = positions[-1]
+                        latest_ori = orientations[-1]
+
+                        trajectory_point = np.concatenate([latest_pos, latest_ori])
+
+                        with self.shared_state.lock:
+                            self.shared_state.trajectory_window.append(trajectory_point)
+
+                    # Keep only recent samples to avoid memory buildup
+                    if len(raw_samples) > self.sampling_rate * self.mpc_horizon:
+                        raw_samples = raw_samples[-self.sampling_rate:]
+                        ekf_rotations = ekf_rotations[-self.sampling_rate:]
+
+        except Exception as e:
+            pass
+
     def worker_loop(self):
         while self.running:
             do_calib = False
@@ -1359,6 +1507,14 @@ class IMUGUI:
                 if self.request_stop:
                     self.request_stop = False
                     do_stop = True
+
+            # Check if we should start trajectory streaming
+            if self.shared_state.following_trajectory and not self._stream_thread_running:
+                self._stream_thread_running = True
+                stream_thread = threading.Thread(target=self.stream_trajectory_to_window, daemon=True)
+                stream_thread.start()
+            elif not self.shared_state.following_trajectory:
+                self._stream_thread_running = False
 
             try:
                 if do_calib:

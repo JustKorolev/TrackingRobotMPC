@@ -8,11 +8,13 @@ import sys
 import time
 import tkinter as tk
 import numpy as np
+from collections import deque
 
 from src.imu import IMUGUI
 from src.trajectory_tracking import MPCSimulationThread
 
 SAMPLING_RATE = 150 # Hz
+MPC_HORIZON = 1 # sec
 
 class SharedTrajectoryState:
     """Thread-safe shared state for IMU and MPC communication."""
@@ -22,7 +24,7 @@ class SharedTrajectoryState:
 
         # Trajectory data
         self.following_trajectory = False
-        self.trajectory_window = []
+        self.trajectory_window = deque(maxlen=MPC_HORIZON*SAMPLING_RATE)
 
     def start_following(self):
         """Start trajectory following (called by MPC)."""
@@ -35,16 +37,14 @@ class SharedTrajectoryState:
             self.following_trajectory = False
 
 
-
-
 def run_imu_gui(shared_state):
     """Run the IMU GUI in the main thread (required for Tkinter)."""
     root = tk.Tk()
-    app = IMUGUI(root, shared_state, SAMPLING_RATE)
+    app = IMUGUI(root, shared_state, SAMPLING_RATE, MPC_HORIZON)
     root.mainloop()
 
 
-def run_mpc_background(shared_state, status_callback=None):
+def run_mpc_background(shared_state, mpc_horizon, status_callback=None):
     """
     Run MPC simulation in a background thread only when trajectory following is active.
     Waits for shared_state.following_trajectory to be True before starting.
@@ -61,7 +61,7 @@ def run_mpc_background(shared_state, status_callback=None):
             status_callback("MPC: Trajectory following activated, starting simulation...")
 
         # Create and start MPC simulation thread
-        sim_thread = MPCSimulationThread(shared_state=shared_state, mpc_horizon=1, dt=1/SAMPLING_RATE)
+        sim_thread = MPCSimulationThread(shared_state=shared_state, mpc_horizon=mpc_horizon, dt=1/SAMPLING_RATE)
         sim_thread.start()
 
         # Monitor the thread
@@ -106,7 +106,7 @@ def main():
 
     # Start MPC simulation in a daemon thread
     # It will wait until user clicks "Start Following" button
-    mpc_thread = threading.Thread(target=run_mpc_background, args=(shared_state,), daemon=True)
+    mpc_thread = threading.Thread(target=run_mpc_background, args=(shared_state, MPC_HORIZON), daemon=True)
     mpc_thread.start()
 
     # Run IMU GUI in main thread (this blocks until GUI closes)

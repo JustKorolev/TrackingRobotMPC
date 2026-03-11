@@ -219,14 +219,6 @@ class UR10e():
             joint_trajectory = np.array(joint_trajectory)
             self.trajectory = joint_trajectory.T
 
-            save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/joint_traj_4.txt")
-
-            # Save with each row = timestep, each column = joint
-            np.savetxt(save_path, self.trajectory.T, fmt="%.8f")
-
-            print(self.trajectory[:, -1])
-
-
         id_s = int(round(t / self.dt))
         id_e = int(round(t / self.dt)) + npoints
         x_r = self.trajectory[:, id_s:id_e]

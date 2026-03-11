@@ -35,11 +35,12 @@ class MPCSimulationThread(threading.Thread):
                                N=self.mpc_horizon,
                                xlb=-x_lim, xub=x_lim,
                                ulb=-u_lim, uub=u_lim,
-                               delta_ulb=-delta_u_lim, delta_uub=delta_u_lim)
+                               delta_ulb=-delta_u_lim, delta_uub=delta_u_lim,
+                               shared_state=self.shared_state)
 
             sim_env_tracking = EmbeddedSimEnvironment(model=ur10e,
                                                       dynamics=ur10e.model,
-                                                      controller=tracking_ctl.mpc_controller,
+                                                      controller=tracking_ctl,
                                                       shared_state=self.shared_state)
 
             x0 = ur10e.get_initial_pose()

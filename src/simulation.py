@@ -22,7 +22,8 @@ class EmbeddedSimEnvironment(object):
         """
         self.model = model
         self.dynamics = dynamics
-        self.controller = controller
+        self.controller = controller.mpc_controller
+        self.horizon = controller.Nt
         self.dt = self.model.dt
         self.estimation_in_the_loop = False
         self.shared_state = shared_state
@@ -41,6 +42,11 @@ class EmbeddedSimEnvironment(object):
 
         self.ran_iterations = 0
         while self.shared_state.following_trajectory:
+
+            if len(self.shared_state.trajectory_window) != self.dt * self.horizon:
+                print("Here")
+                print(len(self.shared_state.trajectory_window))
+                continue
 
             # Get control input and obtain next state
             x = x_vec[:, -1].reshape(self.model.n, 1)

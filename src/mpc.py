@@ -20,7 +20,7 @@ class MPC(object):
                  ulb=None, uub=None,
                  delta_ulb=None, delta_uub=None,
                  terminal_constraint=None, solver_opts=None,
-                 tuning_file=None):
+                 tuning_file=None, shared_state=None):
         """
         Constructor for the MPC class.
         """
@@ -33,6 +33,7 @@ class MPC(object):
         self.Nt = N
         print("Horizon steps: ", N * self.dt)
         self.dynamics = dynamics
+        self.shared_state = shared_state
 
         # Initialize variables
         self.set_cost_functions()
@@ -333,7 +334,7 @@ class MPC(object):
         :return: control input
         :rtype: ca.DM
         """
-        x_traj = self.model.get_joint_trajectory(t, self.Nt + 1)
+        x_traj = np.array(self.shared_state.trajectory_window).T
         x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order='F')
         self.set_reference(x_sp)
         _, u_pred = self.solve_mpc(x0)

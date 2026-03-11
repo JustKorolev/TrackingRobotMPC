@@ -4,7 +4,7 @@ import src.utils as utils
 import os
 
 class UR10e():
-    def __init__(self, dt=0.1):
+    def __init__(self, dt=0.01):
         # Kinematics
         self.dof = 6
         self.link_lengths = [0.1273, 0.612, 0.5723, 0.163941, 0.1157, 0.0922] # in meters
@@ -16,6 +16,9 @@ class UR10e():
         self.n = 6
         self.m = 6
         self.dt = dt
+
+        self.pose_trajectory = None
+        self.joint_trajectory = None
 
     class DHParameters(TypedDict):
         theta: float  # in degrees
@@ -188,7 +191,7 @@ class UR10e():
     def dynamics(self, q, qdot):
         return q + self.dt * qdot
 
-    def get_trajectory(self, t, npoints):
+    def get_joint_trajectory(self, t, npoints):
         """
         Provide trajectory to be followed.
         :param t0: starting time
@@ -199,11 +202,30 @@ class UR10e():
         :rtype: np.array
         """
 
+        # Current saved trajectories are poses
         if t == 0.0:
             f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_4.txt")
             print(f_path)
-            tmp = np.loadtxt(f_path, ndmin=2)[:,1:]
-            self.trajectory = tmp.reshape((self.n, int(tmp.shape[0])), order="F")
+            self.pose_trajectory = np.loadtxt(f_path, ndmin=2)[:,1:]
+            print((self.n, int(self.pose_trajectory.shape[0])))
+
+            # Pose to joint trajectory conversion
+            joint_trajectory = []
+            for pose6 in self.pose_trajectory:
+                pose_T = utils.pose6_to_T([0.5, 0.5, 0.5, 0, 0, 0]) @ utils.pose6_to_T(pose6) # TODO: FIX THIS PRE TRASNFORMATION
+                joints = self.IK("elbow_down", pose_T)
+                joint_trajectory.append(joints)
+
+            joint_trajectory = np.array(joint_trajectory)
+            self.trajectory = joint_trajectory.T
+
+            save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/joint_traj_4.txt")
+
+            # Save with each row = timestep, each column = joint
+            np.savetxt(save_path, self.trajectory.T, fmt="%.8f")
+
+            print(self.trajectory[:, -1])
+
 
         id_s = int(round(t / self.dt))
         id_e = int(round(t / self.dt)) + npoints
@@ -218,12 +240,7 @@ class UR10e():
         :return: starting state
         :rtype: np.ndarray
         """
-        x0 = np.array([0.000000000000000000e+00,
-                    -1.570796326794896558e+00,
-                    1.570796326794896558e+00,
-                    -1.570796326794896558e+00,
-                    -1.570796326794896558e+00,
-                    0.000000000000000000e+00])
+        x0 = np.array([-2.58636783, 1.64280682, 2.07696395, -2.64554437, 1.64949147, 2.25229027])
         return x0
 
 if __name__ == "__main__":

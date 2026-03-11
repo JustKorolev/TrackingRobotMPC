@@ -387,3 +387,18 @@ def xi_mat_np(q):
     Xi[3, 2] = -qz
 
     return Xi
+
+
+def wrap_joints_np(q):
+    """
+    Wrap all revolute joint angles in a joint vector to [-pi, pi).
+    """
+    q = np.asarray(q)
+    return (q + np.pi) % (2 * np.pi) - np.pi
+
+def wrap_joints_cas(q):
+    """
+    Wrap CasADi MX angle(s) to [-pi, pi).
+    """
+    two_pi = 2 * np.pi
+    return q - two_pi * ca.floor((q + np.pi) / two_pi)

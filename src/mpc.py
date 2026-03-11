@@ -259,7 +259,7 @@ class MPC(object):
         # qdotr = ur[0:6]
 
         # Calculate errors
-        eq = q - qr
+        eq = wrap_joints_cas(q - qr)
         # eqdot = qdot - qdotr
 
         xe_vec = ca.vertcat(eq)
@@ -333,7 +333,7 @@ class MPC(object):
         :return: control input
         :rtype: ca.DM
         """
-        x_traj = self.model.get_trajectory(t, self.Nt + 1)
+        x_traj = self.model.get_joint_trajectory(t, self.Nt + 1)
         x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order='F')
         self.set_reference(x_sp)
         _, u_pred = self.solve_mpc(x0)
@@ -389,7 +389,7 @@ class MPC(object):
         qr = xr[0:6]
 
         # Calculate errors
-        xeq = q - qr
+        xeq = wrap_joints_np(q - qr)
 
         return xeq.reshape((6, 1))
 

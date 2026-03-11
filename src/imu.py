@@ -25,9 +25,10 @@ except ImportError:
 
 
 class IMUGUI:
-    def __init__(self, root):
+    def __init__(self, root, shared_state):
         self.root = root
         self.root.title("Pixhawk IMU Trajectory Recorder")
+        self.shared_state = shared_state
 
         self.G = 9.80665
         self.ACCEL_DEADBAND = 0.01
@@ -79,7 +80,7 @@ class IMUGUI:
         self.recorded_times = np.zeros(1)
         self.recorded_orientations = np.zeros((1, 3))
 
-        self.trajectories_dir = r"C:\Users\baaqe\OneDrive - California Institute of Technology\Desktop\Caltech\2025-2026\256a\TrackingRobotMPC\trajectories"
+        self.trajectories_dir = r"..\trajectories"
         self.current_trajectory_name = ""
 
         self.raw_t = deque(maxlen=self.MAX_RAW_SAMPLES)
@@ -150,6 +151,12 @@ class IMUGUI:
 
         self.stop_btn = ttk.Button(top, text="Stop Replay", command=self.stop_replay)
         self.stop_btn.grid(row=5, column=1, padx=5, pady=(10, 0), sticky="w")
+
+        self.follow_btn = ttk.Button(top, text="Start Following", command=self.shared_state.start_following)
+        self.follow_btn.grid(row=5, column=2, padx=5, pady=(10, 0), sticky="w")
+
+        self.stop_follow_btn = ttk.Button(top, text="Stop Following", command=self.shared_state.stop_following)
+        self.stop_follow_btn.grid(row=5, column=3, padx=5, pady=(10, 0), sticky="w")
 
         ttk.Label(top, text="Plot Trajectory").grid(row=6, column=0, sticky="w", pady=(10, 0))
         self.plot_traj_var = tk.StringVar()
@@ -1512,7 +1519,7 @@ class IMUGUI:
         self.root.destroy()
 
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = IMUGUI(root)
-    root.mainloop()
+# if __name__ == "__main__":
+#     root = tk.Tk()
+#     app = IMUGUI(root)
+#     root.mainloop()

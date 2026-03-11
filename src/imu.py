@@ -5,10 +5,11 @@ import glob
 from collections import deque
 
 import numpy as np
-import serial
 import serial.tools.list_ports
 import tkinter as tk
 from tkinter import ttk, messagebox
+
+from pymavlink import mavutil
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -24,20 +25,19 @@ except ImportError:
 
 
 class IMUGUI:
-    def __init__(self, root, shared_state=None):
+    def __init__(self, root):
         self.root = root
-        self.root.title("IMU Trajectory Recorder")
-        self.shared_state = shared_state
+        self.root.title("Pixhawk IMU Trajectory Recorder")
 
         self.G = 9.80665
-        self.ALPHA = 0.98
-        self.ACCEL_DEADBAND = 0.2
-        self.VEL_DEADBAND = 0.01
-        self.GYRO_STATIONARY_THRESH = 0.05
-        self.ACCEL_STATIONARY_THRESH = 0.4
-        self.VELOCITY_DECAY = 0.998
-        self.ZUPT_VELOCITY_DECAY = 0.8
-        self.MAX_VELOCITY = 2.0
+        self.ACCEL_DEADBAND = 0.01
+        self.VEL_DEADBAND = 0.001
+        self.GYRO_STATIONARY_THRESH = 0.03
+        self.ACCEL_STATIONARY_MAG_THRESH = 0.15
+        self.MAX_VELOCITY = 1.0
+        self.ACCEL_LP_ALPHA = 0.3
+        self.ACCEL_CORRECTION_GAIN = 1.5
+        self.GYRO_BIAS_ALPHA = 0.01
         self.MAX_RAW_SAMPLES = 500
 
         self.MAX_LINEAR_VELOCITY = 0.5
@@ -46,8 +46,12 @@ class IMUGUI:
         self.MAX_ANGULAR_ACCELERATION = 5.0
         self.TRAJECTORY_SMOOTHING = True
 
-        self.ser = None
-        self.header_seen = False
+        self.mav = None
+        self._imu_msg_type = None
+        self._pixhawk_R_enu = np.eye(3)
+        self._has_pixhawk_attitude = False
+        self._attitude_count = 0
+        self._FRD_TO_RFU = np.array([[0.,1.,0.],[1.,0.,0.],[0.,0.,-1.]])
         self.running = True
 
         self.state_lock = threading.Lock()
@@ -75,7 +79,7 @@ class IMUGUI:
         self.recorded_times = np.zeros(1)
         self.recorded_orientations = np.zeros((1, 3))
 
-        self.trajectories_dir = r"..\trajectories"
+        self.trajectories_dir = r"C:\Users\baaqe\OneDrive - California Institute of Technology\Desktop\Caltech\2025-2026\256a\TrackingRobotMPC\trajectories"
         self.current_trajectory_name = ""
 
         self.raw_t = deque(maxlen=self.MAX_RAW_SAMPLES)
@@ -147,13 +151,6 @@ class IMUGUI:
         self.stop_btn = ttk.Button(top, text="Stop Replay", command=self.stop_replay)
         self.stop_btn.grid(row=5, column=1, padx=5, pady=(10, 0), sticky="w")
 
-        self.follow_btn = ttk.Button(top, text="Start Following", command=self.shared_state.start_following)
-        self.follow_btn.grid(row=5, column=2, padx=5, pady=(10, 0), sticky="w")
-
-        self.stop_follow_btn = ttk.Button(top, text="Stop Following", command=self.shared_state.stop_following)
-        self.stop_follow_btn.grid(row=5, column=3, padx=5, pady=(10, 0), sticky="w")
-
-
         ttk.Label(top, text="Plot Trajectory").grid(row=6, column=0, sticky="w", pady=(10, 0))
         self.plot_traj_var = tk.StringVar()
         self.plot_combo = ttk.Combobox(top, textvariable=self.plot_traj_var, width=12, state="readonly")
@@ -204,10 +201,10 @@ class IMUGUI:
         self.traj_line, = self.ax_traj.plot([], [], [], linewidth=2)
         self.traj_point, = self.ax_traj.plot([], [], [], marker="o", markersize=7)
 
-        self.ax_traj.set_title("IMU Frame Trajectory", pad=5)
-        self.ax_traj.set_xlabel("X IMU (m)")
-        self.ax_traj.set_ylabel("Y IMU (m)")
-        self.ax_traj.set_zlabel("Z IMU (m)")
+        self.ax_traj.set_title("Trajectory (Start Frame)", pad=5)
+        self.ax_traj.set_xlabel("X (m)")
+        self.ax_traj.set_ylabel("Y (m)")
+        self.ax_traj.set_zlabel("Z (m)")
 
         canvas_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -219,8 +216,13 @@ class IMUGUI:
 
     def auto_detect_port(self):
         ports = list(serial.tools.list_ports.comports())
+        pixhawk_keywords = ["PX4", "Pixhawk", "fmu", "ChibiOS", "STM32"]
         for p in ports:
-            if "Arduino" in p.description or "CH340" in p.description or "USB Serial" in p.description:
+            desc = f"{p.description} {p.manufacturer or ''}"
+            if any(kw.lower() in desc.lower() for kw in pixhawk_keywords):
+                return p.device
+        for p in ports:
+            if "USB Serial" in p.description or "USB" in p.description:
                 return p.device
         return "COM3"
 
@@ -285,7 +287,7 @@ class IMUGUI:
             f.write(f"# Max Linear Vel: {stats.get('max_linear_vel', 0):.3f} m/s, Max Angular Vel: {stats.get('max_angular_vel', 0):.3f} rad/s\n")
             f.write(f"# Max Linear Accel: {stats.get('max_linear_accel', 0):.3f} m/s², Max Angular Accel: {stats.get('max_angular_accel', 0):.3f} rad/s²\n")
             f.write(f"# Total Distance: {stats.get('total_distance', 0):.3f}m, Total Rotation: {stats.get('total_rotation', 0):.3f}rad\n")
-            f.write(f"# Frame: IMU (X=right, Y=front, Z=up)\n")
+            f.write(f"# Frame: Fixed start frame (X=right, Y=front, Z=up at t=0)\n")
 
             for i in range(len(times)):
                 f.write(f"{times[i]:.6f} {positions[i,0]:.6f} {positions[i,1]:.6f} {positions[i,2]:.6f} "
@@ -385,10 +387,10 @@ class IMUGUI:
                 ax1.plot(positions_smooth[:, 0], positions_smooth[:, 1], positions_smooth[:, 2], 'r-', linewidth=2, label='Smoothed')
             ax1.scatter(positions[0, 0], positions[0, 1], positions[0, 2], color='green', s=100, label='Start')
             ax1.scatter(positions[-1, 0], positions[-1, 1], positions[-1, 2], color='red', s=100, label='End')
-            ax1.set_xlabel('X IMU (m)')
-            ax1.set_ylabel('Y IMU (m)')
-            ax1.set_zlabel('Z IMU (m)')
-            ax1.set_title('3D Trajectory (IMU Frame)')
+            ax1.set_xlabel('X (m)')
+            ax1.set_ylabel('Y (m)')
+            ax1.set_zlabel('Z (m)')
+            ax1.set_title('3D Trajectory (Start Frame)')
             ax1.legend()
             ax1.grid(True)
 
@@ -401,8 +403,8 @@ class IMUGUI:
                 ax2.plot(times_smooth, positions_smooth[:, 1], 'g--', label='Y Smoothed', linewidth=2)
                 ax2.plot(times_smooth, positions_smooth[:, 2], 'b--', label='Z Smoothed', linewidth=2)
             ax2.set_xlabel('Time (s)')
-            ax2.set_ylabel('Position IMU (m)')
-            ax2.set_title('XYZ Position vs Time (IMU Frame)')
+            ax2.set_ylabel('Position (m)')
+            ax2.set_title('XYZ Position vs Time (Start Frame)')
             ax2.legend()
             ax2.grid(True)
 
@@ -426,30 +428,25 @@ class IMUGUI:
                 ax4.plot(positions_smooth[:, 0], positions_smooth[:, 1], 'r-', linewidth=2, label='Smoothed XY')
             ax4.scatter(positions[0, 0], positions[0, 1], color='green', s=100, label='Start')
             ax4.scatter(positions[-1, 0], positions[-1, 1], color='red', s=100, label='End')
-            ax4.set_xlabel('X IMU (m)')
-            ax4.set_ylabel('Y IMU (m)')
-            ax4.set_title('XY Trajectory (IMU Frame Top View)')
+            ax4.set_xlabel('X (m)')
+            ax4.set_ylabel('Y (m)')
+            ax4.set_title('XY Trajectory (Top View)')
             ax4.legend()
             ax4.grid(True)
             ax4.axis('equal')
 
-            dt_orig = np.diff(times)
-            pos_diff_orig = np.diff(positions, axis=0)
-            vel_orig = np.linalg.norm(pos_diff_orig, axis=1) / dt_orig
-
             ax5 = fig1.add_subplot(2, 3, 5)
-            ax5.plot(times[:-1], vel_orig, 'b-', linewidth=2, label='Original Velocity', alpha=0.7)
+            ax5.plot(positions[:, 0], positions[:, 2], 'b-', linewidth=2, label='Original XZ', alpha=0.7)
             if has_smoothed:
-                dt_smooth = np.diff(times_smooth)
-                pos_diff_smooth = np.diff(positions_smooth, axis=0)
-                vel_smooth = np.linalg.norm(pos_diff_smooth, axis=1) / dt_smooth
-                ax5.plot(times_smooth[:-1], vel_smooth, 'r-', linewidth=2, label='Smoothed Velocity')
-                ax5.axhline(y=self.MAX_LINEAR_VELOCITY, color='k', linestyle='--', label='Velocity Limit')
-            ax5.set_xlabel('Time (s)')
-            ax5.set_ylabel('Linear Velocity (m/s)')
-            ax5.set_title('Velocity Profile Comparison')
+                ax5.plot(positions_smooth[:, 0], positions_smooth[:, 2], 'r-', linewidth=2, label='Smoothed XZ')
+            ax5.scatter(positions[0, 0], positions[0, 2], color='green', s=100, label='Start')
+            ax5.scatter(positions[-1, 0], positions[-1, 2], color='red', s=100, label='End')
+            ax5.set_xlabel('X (m)')
+            ax5.set_ylabel('Z (m)')
+            ax5.set_title('XZ Trajectory (Side View)')
             ax5.legend()
             ax5.grid(True)
+            ax5.axis('equal')
 
             ax6 = fig1.add_subplot(2, 3, 6)
             stats_orig = self.analyze_trajectory_stats(times, positions, orientations)
@@ -569,16 +566,22 @@ class IMUGUI:
             return {}
 
         dt = np.diff(times)
-        dt = dt[dt > 0]
-
         pos_diff = np.diff(positions, axis=0)
         ori_diff = np.diff(orientations, axis=0)
+
+        valid = dt > 0
+        dt = dt[valid]
+        pos_diff = pos_diff[valid]
+        ori_diff = ori_diff[valid]
+
+        if len(dt) < 1:
+            return {'duration': 0, 'samples': len(times)}
 
         linear_velocities = np.linalg.norm(pos_diff, axis=1) / dt
         angular_velocities = np.linalg.norm(ori_diff, axis=1) / dt
 
-        linear_accelerations = np.diff(linear_velocities) / dt[:-1]
-        angular_accelerations = np.diff(angular_velocities) / dt[:-1]
+        linear_accelerations = np.diff(linear_velocities) / dt[:-1] if len(dt) > 1 else np.array([])
+        angular_accelerations = np.diff(angular_velocities) / dt[:-1] if len(dt) > 1 else np.array([])
 
         stats = {
             'duration': times[-1] - times[0],
@@ -608,94 +611,102 @@ class IMUGUI:
             return
 
         try:
-            if self.ser is not None and self.ser.is_open:
-                self.ser.close()
+            if self.mav is not None:
+                try:
+                    self.mav.close()
+                except Exception:
+                    pass
 
-            self.ser = serial.Serial(port, 115200, timeout=1)
-            self.header_seen = False
-
-            time.sleep(0.1)
-            self.ser.flushInput()
-
-            self.ser.write(b'\n')
-            self.ser.flush()
-            time.sleep(0.1)
-
-            self.set_status(f"Connected to {port} - Testing connection...")
-            self.root.after(100, self.auto_test_connection)
+            self.set_status(f"Connecting to Pixhawk on {port}...")
+            self.mav = mavutil.mavlink_connection(port, baud=57600)
+            self.mav.wait_heartbeat(timeout=10)
+            self.set_status(
+                f"Heartbeat from system {self.mav.target_system} "
+                f"component {self.mav.target_component}")
+            self.request_data_streams()
+            self.root.after(500, self.auto_test_connection)
         except Exception as e:
-            messagebox.showerror("Connection Error", str(e))
+            self.mav = None
+            messagebox.showerror("Connection Error",
+                f"Could not connect to Pixhawk:\n{e}\n\n"
+                "Check:\n"
+                "- Correct COM port\n"
+                "- Pixhawk is powered and USB connected\n"
+                "- No other app (QGC, Mission Planner) is using the port")
             self.set_status("Disconnected")
+
+    def request_data_streams(self):
+        if self.mav is None:
+            return
+        interval_us = 6667  # 150 Hz
+        # Request ALL streams at 150 Hz to ensure ATTITUDE arrives
+        self.mav.mav.request_data_stream_send(
+            self.mav.target_system,
+            self.mav.target_component,
+            mavutil.mavlink.MAV_DATA_STREAM_ALL,
+            150, 1)
+        # Also request specific messages at 150 Hz via SET_MESSAGE_INTERVAL
+        # 30=ATTITUDE, 31=ATTITUDE_QUATERNION, 105=HIGHRES_IMU, 116=SCALED_IMU2
+        for msg_id in (30, 31, 105, 116):
+            self.mav.mav.command_long_send(
+                self.mav.target_system, self.mav.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+                msg_id, interval_us, 0, 0, 0, 0, 0)
 
     def test_serial_connection(self):
         if not self.check_serial():
-            messagebox.showwarning("No Connection", "Please connect to IMU first.")
+            messagebox.showwarning("No Connection", "Please connect to Pixhawk first.")
             return
 
-        self.set_status("Testing connection...")
-
-        self.ser.flushInput()
-        time.sleep(0.1)
+        self.set_status("Testing Pixhawk IMU data stream...")
 
         test_samples = []
         t0 = time.time()
         test_duration = 3.0
-        header_detected = False
 
         while time.time() - t0 < test_duration:
             sample = self.read_one_sample()
             if sample is not None:
                 test_samples.append(sample)
-                if not header_detected:
-                    header_detected = True
-                    self.set_status("Data detected, collecting samples...")
-            time.sleep(0.01)
+            time.sleep(0.005)
 
         elapsed = time.time() - t0
 
         if len(test_samples) == 0:
             messagebox.showerror("Test Failed",
-                "No valid IMU data received. Check:\n" +
-                "• Arduino is connected and powered\n" +
-                "• Correct COM port selected\n" +
-                "• Arduino code is running\n" +
-                "• Baud rate is 115200\n" +
-                "• USB cable is working")
+                "No IMU data received from Pixhawk.\n\n"
+                "Check:\n"
+                "- Pixhawk is powered and USB connected\n"
+                "- Correct COM port selected\n"
+                "- Firmware is running (PX4 or ArduPilot)\n"
+                "- No other app is using the port")
             self.set_status("Test failed: No data")
             return
 
         rate = len(test_samples) / elapsed
-
-        # Analyze the data quality
-        times = [s[0] for s in test_samples]
         accels = [(s[1], s[2], s[3]) for s in test_samples]
-        gyros = [(s[4], s[5], s[6]) for s in test_samples]
-
-        # Check if data looks reasonable
-        avg_accel_mag = np.mean([np.sqrt(a[0]**2 + a[1]**2 + a[2]**2) for a in accels])
+        avg_accel_mag = np.mean([np.sqrt(a[0]**2 + a[1]**2 + a[2]**2)
+                                 for a in accels])
 
         if rate < 50:
             messagebox.showwarning("Low Data Rate",
-                f"Data rate: {rate:.1f} Hz (Expected: ~100 Hz)\n" +
-                f"Samples collected: {len(test_samples)}\n" +
-                f"Average acceleration magnitude: {avg_accel_mag:.2f} m/s²\n\n" +
-                "This may work but calibration will take longer.")
+                f"Data rate: {rate:.1f} Hz (Expected: 100-200 Hz)\n"
+                f"Samples: {len(test_samples)}\n"
+                f"|Accel|: {avg_accel_mag:.2f} m/s²\n\n"
+                "Try requesting higher rates or check firmware stream config.")
             self.set_status(f"Test warning: {rate:.1f} Hz")
         else:
             messagebox.showinfo("Test Successful",
-                f"✓ Connection working perfectly!\n\n" +
-                f"Data rate: {rate:.1f} Hz\n" +
-                f"Samples in {elapsed:.1f}s: {len(test_samples)}\n" +
-                f"Average acceleration: {avg_accel_mag:.2f} m/s²\n\n" +
+                f"Pixhawk IMU working!\n\n"
+                f"Data rate: {rate:.1f} Hz\n"
+                f"Samples in {elapsed:.1f}s: {len(test_samples)}\n"
+                f"|Accel|: {avg_accel_mag:.2f} m/s²\n\n"
                 "Ready for calibration and recording!")
             self.set_status(f"Test passed: {rate:.1f} Hz")
 
     def auto_test_connection(self):
         if not self.check_serial():
             return
-
-        self.ser.flushInput()
-        time.sleep(0.1)
 
         test_samples = []
         t0 = time.time()
@@ -705,20 +716,21 @@ class IMUGUI:
             sample = self.read_one_sample()
             if sample is not None:
                 test_samples.append(sample)
-            time.sleep(0.01)
+            time.sleep(0.005)
 
         elapsed = time.time() - t0
 
         if len(test_samples) == 0:
-            self.set_status("Connection failed - No IMU data received")
+            self.set_status("Connected but no IMU data - check stream config")
             return
 
         rate = len(test_samples) / elapsed
 
+        att_status = "EKF OK" if self._has_pixhawk_attitude else "NO ATTITUDE"
         if rate < 50:
-            self.set_status(f"Connected - Low data rate: {rate:.1f} Hz")
+            self.set_status(f"Pixhawk: {rate:.1f} Hz IMU, {att_status}")
         else:
-            self.set_status(f"Connected - Ready! Data rate: {rate:.1f} Hz")
+            self.set_status(f"Pixhawk: {rate:.1f} Hz IMU, {att_status}")
 
     def debug_raw_imu(self):
         if not self.check_serial():
@@ -849,45 +861,86 @@ class IMUGUI:
             self.request_stop = True
 
     def check_serial(self):
-        return self.ser is not None and self.ser.is_open
+        return self.mav is not None
+
+    def _parse_highres_imu(self, msg):
+        t_us = msg.time_usec
+        # Pixhawk FRD -> user RFU (X=right, Y=front, Z=up)
+        ax = msg.yacc
+        ay = msg.xacc
+        az = -msg.zacc
+        gx = msg.ygyro
+        gy = msg.xgyro
+        gz = -msg.zgyro
+        return (t_us, ax, ay, az, gx, gy, gz)
+
+    def _parse_scaled_imu(self, msg):
+        t_us = msg.time_boot_ms * 1000
+        ax = msg.yacc * self.G / 1000.0
+        ay = msg.xacc * self.G / 1000.0
+        az = -msg.zacc * self.G / 1000.0
+        gx = msg.ygyro / 1000.0
+        gy = msg.xgyro / 1000.0
+        gz = -msg.zgyro / 1000.0
+        return (t_us, ax, ay, az, gx, gy, gz)
+
+    def _parse_raw_imu(self, msg):
+        t_us = msg.time_usec
+        ax = msg.yacc * self.G / 1000.0
+        ay = msg.xacc * self.G / 1000.0
+        az = -msg.zacc * self.G / 1000.0
+        gx = msg.ygyro / 1000.0
+        gy = msg.xgyro / 1000.0
+        gz = -msg.zgyro / 1000.0
+        return (t_us, ax, ay, az, gx, gy, gz)
 
     def read_one_sample(self):
-        if self.ser is None or not self.ser.is_open:
+        if self.mav is None:
             return None
 
         try:
-            while self.ser.in_waiting:
-                line = self.ser.readline().decode("utf-8", errors="ignore").strip()
+            while True:
+                msg = self.mav.recv_match(blocking=False)
+                if msg is None:
+                    return None
 
-                if not line:
+                msg_type = msg.get_type()
+
+                if msg_type == 'ATTITUDE':
+                    M = self._FRD_TO_RFU
+                    R_ned = self.rotation_matrix(msg.roll, msg.pitch, msg.yaw)
+                    self._pixhawk_R_enu = M @ R_ned @ M
+                    self._has_pixhawk_attitude = True
+                    self._attitude_count += 1
                     continue
 
-                if not self.header_seen:
-                    if line == "t,ax,ay,az,gx,gy,gz" or line.startswith("t,ax,ay,az,gx,gy,gz"):
-                        self.header_seen = True
-                        continue
-
-                    parts = line.split(",")
-                    if len(parts) == 7:
-                        try:
-                            t_us, ax, ay, az, gx, gy, gz = map(float, parts)
-                            if 1000000 < t_us < 999999999999 and -50 < ax < 50 and -50 < ay < 50 and -50 < az < 50:
-                                self.header_seen = True
-                                return t_us, ax, ay, az, gx, gy, gz
-                        except ValueError:
-                            pass
+                if msg_type == 'ATTITUDE_QUATERNION':
+                    M = self._FRD_TO_RFU
+                    q = np.array([msg.q1, msg.q2, msg.q3, msg.q4])
+                    R_ned = self.quat_to_rotation_matrix(q)
+                    self._pixhawk_R_enu = M @ R_ned @ M
+                    self._has_pixhawk_attitude = True
+                    self._attitude_count += 1
                     continue
 
-                parts = line.split(",")
-                if len(parts) != 7:
+                if msg_type not in ('HIGHRES_IMU', 'SCALED_IMU2', 'RAW_IMU'):
                     continue
 
-                try:
-                    t_us, ax, ay, az, gx, gy, gz = map(float, parts)
-                    return t_us, ax, ay, az, gx, gy, gz
-                except ValueError:
+                if self._imu_msg_type is None:
+                    self._imu_msg_type = msg_type
+                elif msg_type == 'HIGHRES_IMU' and self._imu_msg_type != 'HIGHRES_IMU':
+                    self._imu_msg_type = 'HIGHRES_IMU'
+                elif msg_type != self._imu_msg_type:
                     continue
-        except Exception as e:
+
+                if msg_type == 'HIGHRES_IMU':
+                    return self._parse_highres_imu(msg)
+                elif msg_type == 'SCALED_IMU2':
+                    return self._parse_scaled_imu(msg)
+                elif msg_type == 'RAW_IMU':
+                    return self._parse_raw_imu(msg)
+
+        except Exception:
             pass
 
         return None
@@ -920,6 +973,72 @@ class IMUGUI:
 
         return rz @ ry @ rx
 
+    def euler_to_quat(self, roll, pitch, yaw):
+        cr, sr = np.cos(roll / 2), np.sin(roll / 2)
+        cp, sp = np.cos(pitch / 2), np.sin(pitch / 2)
+        cy, sy = np.cos(yaw / 2), np.sin(yaw / 2)
+        return np.array([
+            cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+        ])
+
+    def quat_multiply(self, q1, q2):
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2,
+        ])
+
+    def quat_to_rotation_matrix(self, q):
+        w, x, y, z = q
+        return np.array([
+            [1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w)],
+            [2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w)],
+            [2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y)],
+        ])
+
+    def quat_to_euler(self, q):
+        w, x, y, z = q
+        roll = np.arctan2(2*(w*x + y*z), 1 - 2*(x*x + y*y))
+        sinp = np.clip(2*(w*y - z*x), -1.0, 1.0)
+        pitch = np.arcsin(sinp)
+        yaw = np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+        return np.array([roll, pitch, yaw])
+
+    def rotation_matrix_to_quat(self, R):
+        tr = R[0, 0] + R[1, 1] + R[2, 2]
+        if tr > 0:
+            s = 0.5 / np.sqrt(tr + 1.0)
+            w = 0.25 / s
+            x = (R[2, 1] - R[1, 2]) * s
+            y = (R[0, 2] - R[2, 0]) * s
+            z = (R[1, 0] - R[0, 1]) * s
+        elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+            w = (R[2, 1] - R[1, 2]) / s
+            x = 0.25 * s
+            y = (R[0, 1] + R[1, 0]) / s
+            z = (R[0, 2] + R[2, 0]) / s
+        elif R[1, 1] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+            w = (R[0, 2] - R[2, 0]) / s
+            x = (R[0, 1] + R[1, 0]) / s
+            y = 0.25 * s
+            z = (R[1, 2] + R[2, 1]) / s
+        else:
+            s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+            w = (R[1, 0] - R[0, 1]) / s
+            x = (R[0, 2] + R[2, 0]) / s
+            y = (R[1, 2] + R[2, 1]) / s
+            z = 0.25 * s
+        q = np.array([w, x, y, z])
+        return q / np.linalg.norm(q)
+
     def set_axes_equal_3d(self, ax, x, y, z):
         if len(x) < 2:
             ax.set_xlim(-1, 1)
@@ -951,24 +1070,19 @@ class IMUGUI:
         samples = []
         t0 = time.time()
         last_status_time = t0
-        header_attempts = 0
-        no_data_count = 0
 
         while time.time() - t0 < self.calibration_time and self.running:
             sample = self.read_one_sample()
             if sample is None:
-                no_data_count += 1
                 time.sleep(0.005)
 
                 current_time = time.time()
                 if current_time - last_status_time > 1.0:
                     elapsed = current_time - t0
                     remaining = self.calibration_time - elapsed
-                    if not self.header_seen:
-                        header_attempts += 1
-                        self.set_status(f"Waiting for IMU header... ({remaining:.1f}s remaining, attempt {header_attempts})")
-                    else:
-                        self.set_status(f"Collecting samples: {len(samples)} collected ({remaining:.1f}s remaining)")
+                    self.set_status(
+                        f"Calibrating: {len(samples)} samples "
+                        f"({remaining:.1f}s remaining)")
                     last_status_time = current_time
                 continue
 
@@ -978,12 +1092,16 @@ class IMUGUI:
                 elapsed = time.time() - t0
                 remaining = self.calibration_time - elapsed
                 rate = len(samples) / elapsed if elapsed > 0 else 0
-                self.set_status(f"Calibrating: {len(samples)} samples at {rate:.1f} Hz ({remaining:.1f}s remaining)")
+                self.set_status(
+                    f"Calibrating: {len(samples)} samples at "
+                    f"{rate:.1f} Hz ({remaining:.1f}s remaining)")
 
         elapsed_total = time.time() - t0
 
-        if not self.header_seen and len(samples) == 0:
-            raise RuntimeError(f"No IMU data detected after {elapsed_total:.1f}s. Check:\n• Arduino connection and power\n• Correct COM port\n• Arduino code running\n• USB cable working")
+        if len(samples) == 0:
+            raise RuntimeError(
+                f"No IMU data after {elapsed_total:.1f}s. Check Pixhawk "
+                f"connection and that data streams are enabled.")
 
         if len(samples) < 20:
             rate = len(samples) / elapsed_total if elapsed_total > 0 else 0
@@ -1014,7 +1132,9 @@ class IMUGUI:
         self.set_status(f"Recording for {self.record_time:.2f} s. Move the IMU now.")
 
         raw_samples = []
+        ekf_rotations = []
         first_sample_time = None
+        self._attitude_count = 0
 
         with self.state_lock:
             self.raw_t.clear()
@@ -1051,13 +1171,31 @@ class IMUGUI:
                 break
 
             raw_samples.append([elapsed, ax, ay, az, gx, gy, gz])
+            ekf_rotations.append(self._pixhawk_R_enu.copy())
 
         if len(raw_samples) < 10:
             raise RuntimeError("Not enough samples recorded.")
 
-        return self.process_trajectory_data(raw_samples)
+        att_rate = self._attitude_count / max(1, self.record_time)
+        imu_count = len(raw_samples)
+        if self._has_pixhawk_attitude:
+            self.set_status(
+                f"Using Pixhawk EKF attitude ({self._attitude_count} msgs, "
+                f"{att_rate:.0f} Hz) + {imu_count} IMU samples")
+        else:
+            self.set_status(
+                f"WARNING: No ATTITUDE from Pixhawk! "
+                f"Falling back to gyro-only ({imu_count} IMU samples)")
 
-    def process_trajectory_data(self, raw_samples):
+        return self.process_trajectory_data(raw_samples, ekf_rotations)
+
+    def is_stationary_sample(self, accel_body, gyro_body):
+        gyro_mag = np.linalg.norm(gyro_body)
+        accel_mag = np.linalg.norm(accel_body)
+        return (gyro_mag < self.GYRO_STATIONARY_THRESH and
+                abs(accel_mag - self.G) < self.ACCEL_STATIONARY_MAG_THRESH)
+
+    def process_trajectory_data(self, raw_samples, ekf_rotations=None):
         raw_data = np.array(raw_samples)
         times = raw_data[:, 0]
         accels = raw_data[:, 1:4] - self.accel_bias
@@ -1068,15 +1206,43 @@ class IMUGUI:
         orientations = np.zeros((n, 3))
         velocities = np.zeros((n, 3))
 
-        a0 = accels[0]
-        a0_norm = np.linalg.norm(a0)
-        if a0_norm > 1e-6:
-            roll = np.arctan2(a0[1], a0[2])
-            pitch = np.arctan2(-a0[0], np.sqrt(a0[1]**2 + a0[2]**2))
+        use_ekf = (ekf_rotations is not None and len(ekf_rotations) == n
+                    and self._has_pixhawk_attitude)
+
+        # Count how many times the EKF attitude actually changed
+        ekf_resets = 0
+        if use_ekf:
+            for j in range(1, n):
+                if not np.array_equal(ekf_rotations[j], ekf_rotations[j - 1]):
+                    ekf_resets += 1
+
+        print(f"[INS] use_ekf={use_ekf}, has_att={self._has_pixhawk_attitude}, "
+              f"att_count={self._attitude_count}, ekf_resets={ekf_resets}/{n}")
+
+        gravity_enu = np.array([0.0, 0.0, self.G])
+
+        # Initialise quaternion (body → ENU).
+        # If EKF available, seed from its first rotation; else from accel.
+        if use_ekf:
+            q = self.rotation_matrix_to_quat(ekf_rotations[0])
         else:
-            roll, pitch = 0.0, 0.0
-        yaw = 0.0
-        orientations[0] = [roll, pitch, yaw]
+            a0 = accels[0]
+            a0n = np.linalg.norm(a0)
+            if a0n > 1e-6:
+                roll0 = np.arctan2(a0[1], a0[2])
+                pitch0 = np.arctan2(-a0[0], np.sqrt(a0[1]**2 + a0[2]**2))
+            else:
+                roll0, pitch0 = 0.0, 0.0
+            q = self.euler_to_quat(roll0, pitch0, 0.0)
+
+        # Freeze the nav frame = body orientation at t=0
+        R_enu_0 = self.quat_to_rotation_matrix(q)
+        R_enu_0_T = R_enu_0.T
+        orientations[0] = self.quat_to_euler(
+            self.rotation_matrix_to_quat(np.eye(3)))
+
+        gyro_bias_online = np.zeros(3)
+        accel_lp = np.zeros(3)
 
         for i in range(1, n):
             dt = times[i] - times[i - 1]
@@ -1086,58 +1252,74 @@ class IMUGUI:
                 velocities[i] = velocities[i - 1]
                 continue
 
-            ax, ay, az = accels[i]
-            gx, gy, gz = gyros[i]
-            prev_roll, prev_pitch, prev_yaw = orientations[i - 1]
+            is_still = self.is_stationary_sample(accels[i], gyros[i])
 
-            # Gyro-predicted orientation
-            roll_gyro = prev_roll + gx * dt
-            pitch_gyro = prev_pitch + gy * dt
-            yaw_gyro = prev_yaw + gz * dt
+            # --- online gyro bias (learn during still) ---
+            if is_still:
+                ba = self.GYRO_BIAS_ALPHA
+                gyro_bias_online = (1 - ba) * gyro_bias_online + ba * gyros[i]
 
-            # Accel-based roll/pitch (only reliable when near 1g, i.e. not accelerating)
-            accel_norm = np.sqrt(ax**2 + ay**2 + az**2)
-            if 0.5 * self.G < accel_norm < 1.5 * self.G:
-                roll_acc = np.arctan2(ay, az)
-                pitch_acc = np.arctan2(-ax, np.sqrt(ay**2 + az**2))
-                roll = self.ALPHA * roll_gyro + (1 - self.ALPHA) * roll_acc
-                pitch = self.ALPHA * pitch_gyro + (1 - self.ALPHA) * pitch_acc
+            omega = gyros[i] - gyro_bias_online
+
+            # --- propagate quaternion with gyro at IMU rate ---
+            omega_q = np.array([0.0, omega[0], omega[1], omega[2]])
+            q_dot = 0.5 * self.quat_multiply(q, omega_q)
+            q = q + q_dot * dt
+            q = q / np.linalg.norm(q)
+
+            # --- when a new EKF ATTITUDE arrives, RESET to it ---
+            if use_ekf and not np.array_equal(ekf_rotations[i], ekf_rotations[i - 1]):
+                q = self.rotation_matrix_to_quat(ekf_rotations[i])
+
+            # --- tilt correction from accel (only when still, fallback) ---
+            if is_still:
+                accel_norm = np.linalg.norm(accels[i])
+                if accel_norm > 1e-6:
+                    R_cur = self.quat_to_rotation_matrix(q)
+                    g_meas = accels[i] / accel_norm
+                    g_expected = R_cur.T @ np.array([0.0, 0.0, 1.0])
+                    correction = (np.cross(g_meas, g_expected)
+                                  * self.ACCEL_CORRECTION_GAIN)
+                    cq = np.array([0.0, correction[0], correction[1], correction[2]])
+                    q_dot_c = 0.5 * self.quat_multiply(q, cq)
+                    q = q + q_dot_c * dt
+                    q = q / np.linalg.norm(q)
+
+            # --- compute R_body_to_enu and R_body_to_nav ---
+            R_enu_t = self.quat_to_rotation_matrix(q)
+            R_nb = R_enu_0_T @ R_enu_t
+
+            # --- gravity removal & transform to nav frame ---
+            gravity_body = R_enu_t.T @ gravity_enu
+            a_lin_nav = R_nb @ (accels[i] - gravity_body)
+
+            # --- euler angles (relative to start) ---
+            orientations[i, 0] = np.arctan2(R_nb[2, 1], R_nb[2, 2])
+            sinp = np.clip(-R_nb[2, 0], -1.0, 1.0)
+            orientations[i, 1] = np.arcsin(sinp)
+            orientations[i, 2] = np.arctan2(R_nb[1, 0], R_nb[0, 0])
+
+            # --- low-pass filter (in nav frame) ---
+            alpha = self.ACCEL_LP_ALPHA
+            accel_lp = alpha * a_lin_nav + (1.0 - alpha) * accel_lp
+
+            accel_use = accel_lp.copy()
+            accel_use[np.abs(accel_use) < self.ACCEL_DEADBAND] = 0.0
+
+            # --- ZUPT first, then integrate ---
+            if is_still:
+                velocities[i] = np.zeros(3)
             else:
-                roll = roll_gyro
-                pitch = pitch_gyro
-            yaw = yaw_gyro
-            orientations[i] = [roll, pitch, yaw]
-
-            # Rotate gravity into sensor frame and subtract to get linear acceleration
-            R = self.rotation_matrix(roll, pitch, yaw)
-            gravity_in_sensor = R.T @ np.array([0.0, 0.0, self.G])
-            linear_accel_sensor = accels[i] - gravity_in_sensor
-
-            # Transform linear acceleration into world frame for position integration
-            linear_accel_world = R @ linear_accel_sensor
-
-            # Zero-velocity update: detect stationary periods
-            gyro_mag = np.sqrt(gx**2 + gy**2 + gz**2)
-            accel_dev = abs(accel_norm - self.G)
-            is_stationary = (gyro_mag < self.GYRO_STATIONARY_THRESH and
-                             accel_dev < self.ACCEL_STATIONARY_THRESH)
-
-            if is_stationary:
-                velocities[i] = velocities[i - 1] * self.ZUPT_VELOCITY_DECAY
-                if np.linalg.norm(velocities[i]) < self.VEL_DEADBAND:
-                    velocities[i] = np.zeros(3)
-            else:
-                accel_filtered = linear_accel_world.copy()
-                accel_filtered[np.abs(accel_filtered) < self.ACCEL_DEADBAND] = 0.0
-
-                velocities[i] = velocities[i - 1] + accel_filtered * dt
-                velocities[i] *= self.VELOCITY_DECAY
+                velocities[i] = velocities[i - 1] + accel_use * dt
 
                 vel_mag = np.linalg.norm(velocities[i])
-                if vel_mag > self.MAX_VELOCITY:
+                if vel_mag < self.VEL_DEADBAND:
+                    velocities[i] = np.zeros(3)
+                elif vel_mag > self.MAX_VELOCITY:
                     velocities[i] *= self.MAX_VELOCITY / vel_mag
 
-            positions[i] = positions[i - 1] + 0.5 * (velocities[i] + velocities[i - 1]) * dt
+            positions[i] = (positions[i - 1]
+                            + 0.5 * (velocities[i] + velocities[i - 1]) * dt)
 
         return times, positions, orientations
 
@@ -1323,8 +1505,8 @@ class IMUGUI:
     def on_close(self):
         self.running = False
         try:
-            if self.ser is not None and self.ser.is_open:
-                self.ser.close()
+            if self.mav is not None:
+                self.mav.close()
         except Exception:
             pass
         self.root.destroy()

@@ -24,9 +24,10 @@ except ImportError:
 
 
 class IMUGUI:
-    def __init__(self, root):
+    def __init__(self, root, shared_state=None):
         self.root = root
         self.root.title("IMU Trajectory Recorder")
+        self.shared_state = shared_state
 
         self.G = 9.80665
         self.ALPHA = 0.98
@@ -38,7 +39,7 @@ class IMUGUI:
         self.ZUPT_VELOCITY_DECAY = 0.8
         self.MAX_VELOCITY = 2.0
         self.MAX_RAW_SAMPLES = 500
-        
+
         self.MAX_LINEAR_VELOCITY = 0.5
         self.MAX_LINEAR_ACCELERATION = 2.0
         self.MAX_ANGULAR_VELOCITY = 1.0
@@ -73,8 +74,8 @@ class IMUGUI:
         self.recorded_positions = np.zeros((1, 3))
         self.recorded_times = np.zeros(1)
         self.recorded_orientations = np.zeros((1, 3))
-        
-        self.trajectories_dir = r"C:\Users\baaqe\OneDrive - California Institute of Technology\Desktop\Caltech\2025-2026\256a\TrackingRobotMPC\trajectories"
+
+        self.trajectories_dir = r"..\trajectories"
         self.current_trajectory_name = ""
 
         self.raw_t = deque(maxlen=self.MAX_RAW_SAMPLES)
@@ -107,7 +108,7 @@ class IMUGUI:
 
         self.connect_btn = ttk.Button(top, text="Connect", command=self.connect_serial)
         self.connect_btn.grid(row=0, column=3, padx=5)
-        
+
         self.test_btn = ttk.Button(top, text="Test Connection", command=self.test_serial_connection)
         self.test_btn.grid(row=0, column=4, padx=5)
 
@@ -145,6 +146,13 @@ class IMUGUI:
 
         self.stop_btn = ttk.Button(top, text="Stop Replay", command=self.stop_replay)
         self.stop_btn.grid(row=5, column=1, padx=5, pady=(10, 0), sticky="w")
+
+        self.follow_btn = ttk.Button(top, text="Start Following", command=self.shared_state.start_following)
+        self.follow_btn.grid(row=5, column=2, padx=5, pady=(10, 0), sticky="w")
+
+        self.stop_follow_btn = ttk.Button(top, text="Stop Following", command=self.shared_state.stop_following)
+        self.stop_follow_btn.grid(row=5, column=3, padx=5, pady=(10, 0), sticky="w")
+
 
         ttk.Label(top, text="Plot Trajectory").grid(row=6, column=0, sticky="w", pady=(10, 0))
         self.plot_traj_var = tk.StringVar()
@@ -206,7 +214,7 @@ class IMUGUI:
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=canvas_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
+
         self.refresh_trajectory_list()
 
     def auto_detect_port(self):
@@ -226,13 +234,13 @@ class IMUGUI:
     def get_next_trajectory_name(self):
         if not os.path.exists(self.trajectories_dir):
             os.makedirs(self.trajectories_dir)
-        
+
         pattern = os.path.join(self.trajectories_dir, "traj_*.txt")
         existing_files = glob.glob(pattern)
-        
+
         if not existing_files:
             return "traj_1"
-        
+
         numbers = []
         for file in existing_files:
             basename = os.path.basename(file)
@@ -242,7 +250,7 @@ class IMUGUI:
                     numbers.append(int(num_str))
                 except ValueError:
                     continue
-        
+
         if numbers:
             return f"traj_{max(numbers) + 1}"
         else:
@@ -251,12 +259,12 @@ class IMUGUI:
     def refresh_trajectory_list(self):
         if not os.path.exists(self.trajectories_dir):
             os.makedirs(self.trajectories_dir)
-            
+
         pattern = os.path.join(self.trajectories_dir, "*.txt")
         files = glob.glob(pattern)
         trajectory_names = [os.path.splitext(os.path.basename(f))[0] for f in files]
         trajectory_names.sort()
-        
+
         self.traj_combo['values'] = trajectory_names
         self.plot_combo['values'] = trajectory_names
         if trajectory_names:
@@ -266,10 +274,10 @@ class IMUGUI:
     def save_trajectory(self, times, positions, orientations, name):
         if not os.path.exists(self.trajectories_dir):
             os.makedirs(self.trajectories_dir)
-            
+
         filepath = os.path.join(self.trajectories_dir, f"{name}.txt")
         stats = self.analyze_trajectory_stats(times, positions, orientations)
-        
+
         with open(filepath, 'w') as f:
             f.write("# IMU Trajectory Data\n")
             f.write("# Format: time(s) x(m) y(m) z(m) roll(rad) pitch(rad) yaw(rad)\n")
@@ -278,7 +286,7 @@ class IMUGUI:
             f.write(f"# Max Linear Accel: {stats.get('max_linear_accel', 0):.3f} m/s², Max Angular Accel: {stats.get('max_angular_accel', 0):.3f} rad/s²\n")
             f.write(f"# Total Distance: {stats.get('total_distance', 0):.3f}m, Total Rotation: {stats.get('total_rotation', 0):.3f}rad\n")
             f.write(f"# Frame: IMU (X=right, Y=front, Z=up)\n")
-            
+
             for i in range(len(times)):
                 f.write(f"{times[i]:.6f} {positions[i,0]:.6f} {positions[i,1]:.6f} {positions[i,2]:.6f} "
                        f"{orientations[i,0]:.6f} {orientations[i,1]:.6f} {orientations[i,2]:.6f}\n")
@@ -288,32 +296,32 @@ class IMUGUI:
         if not selected:
             messagebox.showwarning("No Selection", "Please select a trajectory to load.")
             return
-            
+
         filepath = os.path.join(self.trajectories_dir, f"{selected}.txt")
         if not os.path.exists(filepath):
             messagebox.showerror("File Not Found", f"Trajectory file {selected}.txt not found.")
             return
-            
+
         try:
             times = []
             positions = []
             orientations = []
-            
+
             with open(filepath, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith('#') or not line:
                         continue
-                    
+
                     parts = line.split()
                     if len(parts) >= 7:
                         times.append(float(parts[0]))
                         positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
                         orientations.append([float(parts[4]), float(parts[5]), float(parts[6])])
-            
+
             if len(times) < 2:
                 raise ValueError("Not enough data points in trajectory file.")
-                
+
             with self.state_lock:
                 self.recorded_times = np.array(times)
                 self.recorded_positions = np.array(positions)
@@ -321,9 +329,9 @@ class IMUGUI:
                 self.trajectory_ready = True
                 self.replay_enabled = False
                 self.current_trajectory_name = selected
-                
+
             self.set_status(f"Loaded trajectory: {selected}")
-            
+
         except Exception as e:
             messagebox.showerror("Load Error", f"Failed to load trajectory: {str(e)}")
 
@@ -331,19 +339,19 @@ class IMUGUI:
         times = []
         positions = []
         orientations = []
-        
+
         with open(filepath, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line.startswith('#') or not line:
                     continue
-                
+
                 parts = line.split()
                 if len(parts) >= 7:
                     times.append(float(parts[0]))
                     positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
                     orientations.append([float(parts[4]), float(parts[5]), float(parts[6])])
-        
+
         return np.array(times), np.array(positions), np.array(orientations)
 
     def plot_and_save_trajectory(self):
@@ -351,26 +359,26 @@ class IMUGUI:
         if not selected:
             messagebox.showwarning("No Selection", "Please select a trajectory to plot.")
             return
-            
+
         filepath = os.path.join(self.trajectories_dir, f"{selected}.txt")
         if not os.path.exists(filepath):
             messagebox.showerror("File Not Found", f"Trajectory file {selected}.txt not found.")
             return
-            
+
         try:
             times, positions, orientations = self.load_trajectory_data(filepath)
-            
+
             if len(times) < 2:
                 raise ValueError("Not enough data points in trajectory file.")
-            
+
             smoothed_filepath = os.path.join(self.trajectories_dir, f"{selected}_smoothed.txt")
             has_smoothed = os.path.exists(smoothed_filepath)
-            
+
             if has_smoothed:
                 times_smooth, positions_smooth, orientations_smooth = self.load_trajectory_data(smoothed_filepath)
-            
+
             fig1 = plt.figure(figsize=(15, 10))
-            
+
             ax1 = fig1.add_subplot(2, 3, 1, projection='3d')
             ax1.plot(positions[:, 0], positions[:, 1], positions[:, 2], 'b-', linewidth=2, label='Original', alpha=0.7)
             if has_smoothed:
@@ -383,7 +391,7 @@ class IMUGUI:
             ax1.set_title('3D Trajectory (IMU Frame)')
             ax1.legend()
             ax1.grid(True)
-            
+
             ax2 = fig1.add_subplot(2, 3, 2)
             ax2.plot(times, positions[:, 0], 'r-', label='X Original', linewidth=2, alpha=0.7)
             ax2.plot(times, positions[:, 1], 'g-', label='Y Original', linewidth=2, alpha=0.7)
@@ -397,7 +405,7 @@ class IMUGUI:
             ax2.set_title('XYZ Position vs Time (IMU Frame)')
             ax2.legend()
             ax2.grid(True)
-            
+
             ax3 = fig1.add_subplot(2, 3, 3)
             ax3.plot(times, np.degrees(orientations[:, 0]), 'r-', label='Roll Original', linewidth=2, alpha=0.7)
             ax3.plot(times, np.degrees(orientations[:, 1]), 'g-', label='Pitch Original', linewidth=2, alpha=0.7)
@@ -411,7 +419,7 @@ class IMUGUI:
             ax3.set_title('IMU Rotation vs Time')
             ax3.legend()
             ax3.grid(True)
-            
+
             ax4 = fig1.add_subplot(2, 3, 4)
             ax4.plot(positions[:, 0], positions[:, 1], 'b-', linewidth=2, label='Original XY', alpha=0.7)
             if has_smoothed:
@@ -424,11 +432,11 @@ class IMUGUI:
             ax4.legend()
             ax4.grid(True)
             ax4.axis('equal')
-            
+
             dt_orig = np.diff(times)
             pos_diff_orig = np.diff(positions, axis=0)
             vel_orig = np.linalg.norm(pos_diff_orig, axis=1) / dt_orig
-            
+
             ax5 = fig1.add_subplot(2, 3, 5)
             ax5.plot(times[:-1], vel_orig, 'b-', linewidth=2, label='Original Velocity', alpha=0.7)
             if has_smoothed:
@@ -442,7 +450,7 @@ class IMUGUI:
             ax5.set_title('Velocity Profile Comparison')
             ax5.legend()
             ax5.grid(True)
-            
+
             ax6 = fig1.add_subplot(2, 3, 6)
             stats_orig = self.analyze_trajectory_stats(times, positions, orientations)
             stats_text = f"Original Trajectory:\n"
@@ -451,7 +459,7 @@ class IMUGUI:
             stats_text += f"Max Vel: {stats_orig.get('max_linear_vel', 0):.3f} m/s\n"
             stats_text += f"Avg Vel: {stats_orig.get('avg_linear_vel', 0):.3f} m/s\n"
             stats_text += f"Distance: {stats_orig.get('total_distance', 0):.3f}m\n"
-            
+
             if has_smoothed:
                 stats_smooth = self.analyze_trajectory_stats(times_smooth, positions_smooth, orientations_smooth)
                 stats_text += f"\nSmoothed Trajectory:\n"
@@ -460,7 +468,7 @@ class IMUGUI:
                 stats_text += f"Max Vel: {stats_smooth.get('max_linear_vel', 0):.3f} m/s\n"
                 stats_text += f"Avg Vel: {stats_smooth.get('avg_linear_vel', 0):.3f} m/s\n"
                 stats_text += f"Distance: {stats_smooth.get('total_distance', 0):.3f}m\n"
-            
+
             ax6.text(0.05, 0.95, stats_text, transform=ax6.transAxes, fontsize=10,
                     verticalalignment='top', fontfamily='monospace',
                     bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
@@ -468,110 +476,110 @@ class IMUGUI:
             ax6.set_ylim(0, 1)
             ax6.axis('off')
             ax6.set_title('Trajectory Statistics')
-            
+
             plt.tight_layout()
-            
+
             plot_filename = os.path.join(self.trajectories_dir, f"{selected}_comparison_plot.png")
             fig1.savefig(plot_filename, dpi=300, bbox_inches='tight')
-            
+
             plt.show()
-            
+
             status_msg = f"Comparison plot saved as {selected}_comparison_plot.png"
             if not has_smoothed:
                 status_msg += " (No smoothed version found)"
             self.set_status(status_msg)
-            
+
         except Exception as e:
             messagebox.showerror("Plot Error", f"Failed to plot trajectory: {str(e)}")
 
     def smooth_trajectory(self, times, positions, orientations):
         if not self.TRAJECTORY_SMOOTHING or len(times) < 3:
             return times, positions, orientations
-            
+
         if HAS_SCIPY:
             sigma = 2.0
-            
+
             smoothed_positions = np.zeros_like(positions)
             smoothed_orientations = np.zeros_like(orientations)
-            
+
             for i in range(3):
                 smoothed_positions[:, i] = gaussian_filter1d(positions[:, i], sigma=sigma)
                 smoothed_orientations[:, i] = gaussian_filter1d(orientations[:, i], sigma=sigma)
-            
+
             return times.copy(), smoothed_positions, smoothed_orientations
         else:
             smoothed_positions = []
             smoothed_orientations = []
             smoothed_times = []
-            
+
             window_size = 5
-            
+
             for i in range(len(times)):
                 start_idx = max(0, i - window_size // 2)
                 end_idx = min(len(times), i + window_size // 2 + 1)
-                
+
                 pos_avg = np.mean(positions[start_idx:end_idx], axis=0)
                 ori_avg = np.mean(orientations[start_idx:end_idx], axis=0)
-                
+
                 smoothed_times.append(times[i])
                 smoothed_positions.append(pos_avg)
                 smoothed_orientations.append(ori_avg)
-            
+
             return np.array(smoothed_times), np.array(smoothed_positions), np.array(smoothed_orientations)
 
     def apply_acceleration_limits(self, times, positions, orientations):
         if len(times) < 3:
             return times, positions, orientations
-            
+
         dt_avg = np.mean(np.diff(times))
-        
+
         limited_positions = positions.copy()
         limited_orientations = orientations.copy()
-        
+
         for iteration in range(3):
             pos_vel = np.gradient(limited_positions, dt_avg, axis=0)
             ori_vel = np.gradient(limited_orientations, dt_avg, axis=0)
-            
+
             pos_vel_mag = np.linalg.norm(pos_vel, axis=1)
             ori_vel_mag = np.linalg.norm(ori_vel, axis=1)
-            
+
             pos_scale = np.ones(len(pos_vel_mag))
             ori_scale = np.ones(len(ori_vel_mag))
-            
+
             pos_over = pos_vel_mag > self.MAX_LINEAR_VELOCITY
             ori_over = ori_vel_mag > self.MAX_ANGULAR_VELOCITY
-            
+
             pos_scale[pos_over] = self.MAX_LINEAR_VELOCITY / pos_vel_mag[pos_over]
             ori_scale[ori_over] = self.MAX_ANGULAR_VELOCITY / ori_vel_mag[ori_over]
-            
+
             for i in range(3):
                 pos_vel[:, i] *= pos_scale
                 ori_vel[:, i] *= ori_scale
-            
+
             limited_positions = np.cumsum(pos_vel * dt_avg, axis=0)
             limited_orientations = np.cumsum(ori_vel * dt_avg, axis=0)
-            
+
             limited_positions += positions[0] - limited_positions[0]
             limited_orientations += orientations[0] - limited_orientations[0]
-        
+
         return times, limited_positions, limited_orientations
 
     def analyze_trajectory_stats(self, times, positions, orientations):
         if len(times) < 2:
             return {}
-            
+
         dt = np.diff(times)
         dt = dt[dt > 0]
-        
+
         pos_diff = np.diff(positions, axis=0)
         ori_diff = np.diff(orientations, axis=0)
-        
+
         linear_velocities = np.linalg.norm(pos_diff, axis=1) / dt
         angular_velocities = np.linalg.norm(ori_diff, axis=1) / dt
-        
+
         linear_accelerations = np.diff(linear_velocities) / dt[:-1]
         angular_accelerations = np.diff(angular_velocities) / dt[:-1]
-        
+
         stats = {
             'duration': times[-1] - times[0],
             'samples': len(times),
@@ -585,7 +593,7 @@ class IMUGUI:
             'total_distance': np.sum(np.linalg.norm(pos_diff, axis=1)) if len(pos_diff) > 0 else 0,
             'total_rotation': np.sum(np.linalg.norm(ori_diff, axis=1)) if len(ori_diff) > 0 else 0
         }
-        
+
         return stats
 
     def set_status(self, text):
@@ -605,14 +613,14 @@ class IMUGUI:
 
             self.ser = serial.Serial(port, 115200, timeout=1)
             self.header_seen = False
-            
+
             time.sleep(0.1)
             self.ser.flushInput()
-            
+
             self.ser.write(b'\n')
             self.ser.flush()
             time.sleep(0.1)
-            
+
             self.set_status(f"Connected to {port} - Testing connection...")
             self.root.after(100, self.auto_test_connection)
         except Exception as e:
@@ -623,17 +631,17 @@ class IMUGUI:
         if not self.check_serial():
             messagebox.showwarning("No Connection", "Please connect to IMU first.")
             return
-            
+
         self.set_status("Testing connection...")
-        
+
         self.ser.flushInput()
         time.sleep(0.1)
-        
+
         test_samples = []
         t0 = time.time()
         test_duration = 3.0
         header_detected = False
-        
+
         while time.time() - t0 < test_duration:
             sample = self.read_one_sample()
             if sample is not None:
@@ -642,11 +650,11 @@ class IMUGUI:
                     header_detected = True
                     self.set_status("Data detected, collecting samples...")
             time.sleep(0.01)
-        
+
         elapsed = time.time() - t0
-        
+
         if len(test_samples) == 0:
-            messagebox.showerror("Test Failed", 
+            messagebox.showerror("Test Failed",
                 "No valid IMU data received. Check:\n" +
                 "• Arduino is connected and powered\n" +
                 "• Correct COM port selected\n" +
@@ -655,26 +663,26 @@ class IMUGUI:
                 "• USB cable is working")
             self.set_status("Test failed: No data")
             return
-            
+
         rate = len(test_samples) / elapsed
-        
+
         # Analyze the data quality
         times = [s[0] for s in test_samples]
         accels = [(s[1], s[2], s[3]) for s in test_samples]
         gyros = [(s[4], s[5], s[6]) for s in test_samples]
-        
+
         # Check if data looks reasonable
         avg_accel_mag = np.mean([np.sqrt(a[0]**2 + a[1]**2 + a[2]**2) for a in accels])
-        
+
         if rate < 50:
-            messagebox.showwarning("Low Data Rate", 
+            messagebox.showwarning("Low Data Rate",
                 f"Data rate: {rate:.1f} Hz (Expected: ~100 Hz)\n" +
                 f"Samples collected: {len(test_samples)}\n" +
                 f"Average acceleration magnitude: {avg_accel_mag:.2f} m/s²\n\n" +
                 "This may work but calibration will take longer.")
             self.set_status(f"Test warning: {rate:.1f} Hz")
         else:
-            messagebox.showinfo("Test Successful", 
+            messagebox.showinfo("Test Successful",
                 f"✓ Connection working perfectly!\n\n" +
                 f"Data rate: {rate:.1f} Hz\n" +
                 f"Samples in {elapsed:.1f}s: {len(test_samples)}\n" +
@@ -685,28 +693,28 @@ class IMUGUI:
     def auto_test_connection(self):
         if not self.check_serial():
             return
-            
+
         self.ser.flushInput()
         time.sleep(0.1)
-        
+
         test_samples = []
         t0 = time.time()
         test_duration = 2.0
-        
+
         while time.time() - t0 < test_duration:
             sample = self.read_one_sample()
             if sample is not None:
                 test_samples.append(sample)
             time.sleep(0.01)
-        
+
         elapsed = time.time() - t0
-        
+
         if len(test_samples) == 0:
             self.set_status("Connection failed - No IMU data received")
             return
-            
+
         rate = len(test_samples) / elapsed
-        
+
         if rate < 50:
             self.set_status(f"Connected - Low data rate: {rate:.1f} Hz")
         else:
@@ -716,31 +724,31 @@ class IMUGUI:
         if not self.check_serial():
             messagebox.showwarning("No Connection", "Please connect to IMU first.")
             return
-            
+
         self.set_status("Debug mode: Collecting 5 seconds of raw IMU data...")
-        
+
         raw_samples = []
         t0 = time.time()
         debug_duration = 5.0
-        
+
         while time.time() - t0 < debug_duration:
             sample = self.read_one_sample()
             if sample is not None:
                 t_us, ax, ay, az, gx, gy, gz = sample
                 raw_samples.append([time.time() - t0, ax, ay, az, gx, gy, gz])
             time.sleep(0.01)
-        
+
         if len(raw_samples) < 10:
             messagebox.showerror("Debug Failed", "Not enough raw data collected.")
             return
-            
+
         raw_data = np.array(raw_samples)
         times = raw_data[:, 0]
         accels = raw_data[:, 1:4]
         gyros = raw_data[:, 4:7]
-        
+
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
-        
+
         ax1.plot(times, accels[:, 0], 'r-', label='X accel', linewidth=2)
         ax1.plot(times, accels[:, 1], 'g-', label='Y accel', linewidth=2)
         ax1.plot(times, accels[:, 2], 'b-', label='Z accel', linewidth=2)
@@ -749,7 +757,7 @@ class IMUGUI:
         ax1.set_ylabel('Acceleration (m/s²)')
         ax1.legend()
         ax1.grid(True)
-        
+
         ax2.plot(times, gyros[:, 0], 'r-', label='X gyro', linewidth=2)
         ax2.plot(times, gyros[:, 1], 'g-', label='Y gyro', linewidth=2)
         ax2.plot(times, gyros[:, 2], 'b-', label='Z gyro', linewidth=2)
@@ -758,10 +766,10 @@ class IMUGUI:
         ax2.set_ylabel('Angular Velocity (rad/s)')
         ax2.legend()
         ax2.grid(True)
-        
+
         accels_cal = accels - self.accel_bias
         gyros_cal = gyros - self.gyro_bias
-        
+
         ax3.plot(times, accels_cal[:, 0], 'r-', label='X accel (cal)', linewidth=2)
         ax3.plot(times, accels_cal[:, 1], 'g-', label='Y accel (cal)', linewidth=2)
         ax3.plot(times, accels_cal[:, 2], 'b-', label='Z accel (cal)', linewidth=2)
@@ -770,7 +778,7 @@ class IMUGUI:
         ax3.set_ylabel('Acceleration (m/s²)')
         ax3.legend()
         ax3.grid(True)
-        
+
         ax4.plot(times, gyros_cal[:, 0], 'r-', label='X gyro (cal)', linewidth=2)
         ax4.plot(times, gyros_cal[:, 1], 'g-', label='Y gyro (cal)', linewidth=2)
         ax4.plot(times, gyros_cal[:, 2], 'b-', label='Z gyro (cal)', linewidth=2)
@@ -779,14 +787,14 @@ class IMUGUI:
         ax4.set_ylabel('Angular Velocity (rad/s)')
         ax4.legend()
         ax4.grid(True)
-        
+
         plt.tight_layout()
         plt.show()
-        
+
         accel_means = np.mean(np.abs(accels_cal), axis=0)
         gyro_means = np.mean(np.abs(gyros_cal), axis=0)
-        
-        messagebox.showinfo("Debug Results", 
+
+        messagebox.showinfo("Debug Results",
             f"Raw IMU Data Analysis:\n\n" +
             f"Average |Acceleration| (m/s²):\n" +
             f"  X: {accel_means[0]:.3f}\n" +
@@ -798,7 +806,7 @@ class IMUGUI:
             f"  Z: {gyro_means[2]:.3f}\n\n" +
             f"Move IMU in different directions and\n" +
             f"note which axis shows the most change!")
-        
+
         self.set_status("Debug complete - Check plots and results")
 
     def start_calibration(self):
@@ -858,7 +866,7 @@ class IMUGUI:
                     if line == "t,ax,ay,az,gx,gy,gz" or line.startswith("t,ax,ay,az,gx,gy,gz"):
                         self.header_seen = True
                         continue
-                    
+
                     parts = line.split(",")
                     if len(parts) == 7:
                         try:
@@ -945,13 +953,13 @@ class IMUGUI:
         last_status_time = t0
         header_attempts = 0
         no_data_count = 0
-        
+
         while time.time() - t0 < self.calibration_time and self.running:
             sample = self.read_one_sample()
             if sample is None:
                 no_data_count += 1
                 time.sleep(0.005)
-                
+
                 current_time = time.time()
                 if current_time - last_status_time > 1.0:
                     elapsed = current_time - t0
@@ -963,9 +971,9 @@ class IMUGUI:
                         self.set_status(f"Collecting samples: {len(samples)} collected ({remaining:.1f}s remaining)")
                     last_status_time = current_time
                 continue
-                
+
             samples.append(sample)
-            
+
             if len(samples) % 50 == 0:
                 elapsed = time.time() - t0
                 remaining = self.calibration_time - elapsed
@@ -973,10 +981,10 @@ class IMUGUI:
                 self.set_status(f"Calibrating: {len(samples)} samples at {rate:.1f} Hz ({remaining:.1f}s remaining)")
 
         elapsed_total = time.time() - t0
-        
+
         if not self.header_seen and len(samples) == 0:
             raise RuntimeError(f"No IMU data detected after {elapsed_total:.1f}s. Check:\n• Arduino connection and power\n• Correct COM port\n• Arduino code running\n• USB cable working")
-        
+
         if len(samples) < 20:
             rate = len(samples) / elapsed_total if elapsed_total > 0 else 0
             raise RuntimeError(f"Not enough samples during calibration: got {len(samples)}/20 minimum in {elapsed_total:.1f}s (rate: {rate:.1f} Hz). Check IMU connection and data rate.")

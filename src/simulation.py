@@ -6,7 +6,7 @@ import time
 
 class EmbeddedSimEnvironment(object):
 
-    def __init__(self, model, dynamics, controller, time=100.0):
+    def __init__(self, model, dynamics, controller, time=100.0, shared_state=None):
         """
         Embedded simulation environment. Simulates the syste given dynamics
         and a control law, plots in matplotlib.
@@ -23,9 +23,10 @@ class EmbeddedSimEnvironment(object):
         self.model = model
         self.dynamics = dynamics
         self.controller = controller
-        self.total_sim_time = time  # seconds
         self.dt = self.model.dt
         self.estimation_in_the_loop = False
+        self.shared_state = shared_state
+        self.ran_iterations = 0
 
     def run(self, x0):
         """
@@ -33,17 +34,17 @@ class EmbeddedSimEnvironment(object):
         """
 
         print("Running simulation....")
-        sim_loop_length = int(self.total_sim_time / self.dt) + 1  # account for 0th
         t = np.array([0])
         x_vec = np.array([x0]).reshape(self.model.n, 1)
         u_vec = np.empty((6, 0))
         e_vec = np.empty((6, 0))
 
-        for i in range(sim_loop_length):
+        self.ran_iterations = 0
+        while self.shared_state.following_trajectory:
 
             # Get control input and obtain next state
             x = x_vec[:, -1].reshape(self.model.n, 1)
-            u, error = self.controller(x, i * self.dt)
+            u, error = self.controller(x, self.ran_iterations * self.dt)
             x_next = self.dynamics(x, u)
 
             # Store data
@@ -52,14 +53,15 @@ class EmbeddedSimEnvironment(object):
             u_vec = np.append(u_vec, np.array(u).reshape(self.model.m, 1), axis=1)
             e_vec = np.append(e_vec, error.reshape(6, 1), axis=1)
 
-        _, error = self.controller(x_next, i * self.dt)
+            self.ran_iterations += 1
+
+        _, error = self.controller(x_next, self.ran_iterations * self.dt)
         e_vec = np.append(e_vec, error.reshape((6, 1)), axis=1)
 
         self.t = t
         self.x_vec = x_vec
         self.u_vec = u_vec
         self.e_vec = e_vec
-        self.sim_loop_length = sim_loop_length
         return t, x_vec, u_vec
 
     def visualize(self):
@@ -68,7 +70,8 @@ class EmbeddedSimEnvironment(object):
         State: q in R^6
         Input: qdot in R^6
         """
-        variables = [self.t, self.x_vec, self.u_vec, self.sim_loop_length]
+        loop_length = self.ran_iterations / self.dt
+        variables = [self.t, self.x_vec, self.u_vec, loop_length]
         if any(elem is None for elem in variables):
             print("Please run the simulation first with the method 'run'.")
             return
@@ -107,7 +110,8 @@ class EmbeddedSimEnvironment(object):
         Error: q - q_ref in R^6
         Input: qdot in R^6
         """
-        variables = [self.t, self.e_vec, self.u_vec, self.sim_loop_length]
+        loop_length = self.ran_iterations / self.dt
+        variables = [self.t, self.e_vec, self.u_vec, loop_length]
         if any(elem is None for elem in variables):
             print("Please run the simulation first with the method 'run'.")
             return

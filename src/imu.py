@@ -1010,6 +1010,35 @@ class IMUGUI:
         yaw = np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
         return np.array([roll, pitch, yaw])
 
+    def rotation_matrix_to_quat(self, R):
+        tr = R[0, 0] + R[1, 1] + R[2, 2]
+        if tr > 0:
+            s = 0.5 / np.sqrt(tr + 1.0)
+            w = 0.25 / s
+            x = (R[2, 1] - R[1, 2]) * s
+            y = (R[0, 2] - R[2, 0]) * s
+            z = (R[1, 0] - R[0, 1]) * s
+        elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+            w = (R[2, 1] - R[1, 2]) / s
+            x = 0.25 * s
+            y = (R[0, 1] + R[1, 0]) / s
+            z = (R[0, 2] + R[2, 0]) / s
+        elif R[1, 1] > R[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+            w = (R[0, 2] - R[2, 0]) / s
+            x = (R[0, 1] + R[1, 0]) / s
+            y = 0.25 * s
+            z = (R[1, 2] + R[2, 1]) / s
+        else:
+            s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+            w = (R[1, 0] - R[0, 1]) / s
+            x = (R[0, 2] + R[2, 0]) / s
+            y = (R[1, 2] + R[2, 1]) / s
+            z = 0.25 * s
+        q = np.array([w, x, y, z])
+        return q / np.linalg.norm(q)
+
     def set_axes_equal_3d(self, ax, x, y, z):
         if len(x) < 2:
             ax.set_xlim(-1, 1)
@@ -1180,12 +1209,22 @@ class IMUGUI:
         use_ekf = (ekf_rotations is not None and len(ekf_rotations) == n
                     and self._has_pixhawk_attitude)
 
+        # Count how many times the EKF attitude actually changed
+        ekf_resets = 0
         if use_ekf:
-            # Pixhawk EKF provides R_body_to_enu at each timestep.
-            # Freeze the nav frame as body frame at t=0.
-            R_enu_0 = ekf_rotations[0]
-            R_enu_0_T = R_enu_0.T
-            gravity_enu = np.array([0.0, 0.0, self.G])
+            for j in range(1, n):
+                if not np.array_equal(ekf_rotations[j], ekf_rotations[j - 1]):
+                    ekf_resets += 1
+
+        print(f"[INS] use_ekf={use_ekf}, has_att={self._has_pixhawk_attitude}, "
+              f"att_count={self._attitude_count}, ekf_resets={ekf_resets}/{n}")
+
+        gravity_enu = np.array([0.0, 0.0, self.G])
+
+        # Initialise quaternion (body → ENU).
+        # If EKF available, seed from its first rotation; else from accel.
+        if use_ekf:
+            q = self.rotation_matrix_to_quat(ekf_rotations[0])
         else:
             a0 = accels[0]
             a0n = np.linalg.norm(a0)
@@ -1195,10 +1234,14 @@ class IMUGUI:
             else:
                 roll0, pitch0 = 0.0, 0.0
             q = self.euler_to_quat(roll0, pitch0, 0.0)
-            orientations[0] = [roll0, pitch0, 0.0]
-            gravity_nav = np.array([0.0, 0.0, self.G])
-            gyro_bias_online = np.zeros(3)
 
+        # Freeze the nav frame = body orientation at t=0
+        R_enu_0 = self.quat_to_rotation_matrix(q)
+        R_enu_0_T = R_enu_0.T
+        orientations[0] = self.quat_to_euler(
+            self.rotation_matrix_to_quat(np.eye(3)))
+
+        gyro_bias_online = np.zeros(3)
         accel_lp = np.zeros(3)
 
         for i in range(1, n):
@@ -1211,49 +1254,50 @@ class IMUGUI:
 
             is_still = self.is_stationary_sample(accels[i], gyros[i])
 
-            if use_ekf:
-                # R_nb: body at time i -> frozen nav frame (= body at t=0)
-                R_enu_t = ekf_rotations[i]
-                R = R_enu_0_T @ R_enu_t
+            # --- online gyro bias (learn during still) ---
+            if is_still:
+                ba = self.GYRO_BIAS_ALPHA
+                gyro_bias_online = (1 - ba) * gyro_bias_online + ba * gyros[i]
 
-                # Gravity in body frame, then linear accel in nav frame
-                gravity_body = R_enu_t.T @ gravity_enu
-                a_lin_nav = R @ (accels[i] - gravity_body)
+            omega = gyros[i] - gyro_bias_online
 
-                # Euler angles from R for output
-                orientations[i, 0] = np.arctan2(R[2, 1], R[2, 2])
-                sinp = np.clip(-R[2, 0], -1.0, 1.0)
-                orientations[i, 1] = np.arcsin(sinp)
-                orientations[i, 2] = np.arctan2(R[1, 0], R[0, 0])
-            else:
-                # Fallback: quaternion propagation
-                if is_still:
-                    ba = self.GYRO_BIAS_ALPHA
-                    gyro_bias_online = ((1 - ba) * gyro_bias_online
-                                        + ba * gyros[i])
+            # --- propagate quaternion with gyro at IMU rate ---
+            omega_q = np.array([0.0, omega[0], omega[1], omega[2]])
+            q_dot = 0.5 * self.quat_multiply(q, omega_q)
+            q = q + q_dot * dt
+            q = q / np.linalg.norm(q)
 
-                omega = gyros[i] - gyro_bias_online
+            # --- when a new EKF ATTITUDE arrives, RESET to it ---
+            if use_ekf and not np.array_equal(ekf_rotations[i], ekf_rotations[i - 1]):
+                q = self.rotation_matrix_to_quat(ekf_rotations[i])
 
-                accel_correction = np.zeros(3)
+            # --- tilt correction from accel (only when still, fallback) ---
+            if is_still:
                 accel_norm = np.linalg.norm(accels[i])
-                if is_still and accel_norm > 1e-6:
-                    R_prev = self.quat_to_rotation_matrix(q)
+                if accel_norm > 1e-6:
+                    R_cur = self.quat_to_rotation_matrix(q)
                     g_meas = accels[i] / accel_norm
-                    g_expected = R_prev.T @ np.array([0.0, 0.0, 1.0])
-                    accel_correction = (np.cross(g_meas, g_expected)
-                                        * self.ACCEL_CORRECTION_GAIN)
+                    g_expected = R_cur.T @ np.array([0.0, 0.0, 1.0])
+                    correction = (np.cross(g_meas, g_expected)
+                                  * self.ACCEL_CORRECTION_GAIN)
+                    cq = np.array([0.0, correction[0], correction[1], correction[2]])
+                    q_dot_c = 0.5 * self.quat_multiply(q, cq)
+                    q = q + q_dot_c * dt
+                    q = q / np.linalg.norm(q)
 
-                corrected_omega = omega + accel_correction
-                omega_q = np.array([0.0, corrected_omega[0],
-                                    corrected_omega[1], corrected_omega[2]])
-                q_dot = 0.5 * self.quat_multiply(q, omega_q)
-                q = q + q_dot * dt
-                q = q / np.linalg.norm(q)
+            # --- compute R_body_to_enu and R_body_to_nav ---
+            R_enu_t = self.quat_to_rotation_matrix(q)
+            R_nb = R_enu_0_T @ R_enu_t
 
-                R = self.quat_to_rotation_matrix(q)
-                gravity_body = R.T @ gravity_nav
-                a_lin_nav = R @ (accels[i] - gravity_body)
-                orientations[i] = self.quat_to_euler(q)
+            # --- gravity removal & transform to nav frame ---
+            gravity_body = R_enu_t.T @ gravity_enu
+            a_lin_nav = R_nb @ (accels[i] - gravity_body)
+
+            # --- euler angles (relative to start) ---
+            orientations[i, 0] = np.arctan2(R_nb[2, 1], R_nb[2, 2])
+            sinp = np.clip(-R_nb[2, 0], -1.0, 1.0)
+            orientations[i, 1] = np.arcsin(sinp)
+            orientations[i, 2] = np.arctan2(R_nb[1, 0], R_nb[0, 0])
 
             # --- low-pass filter (in nav frame) ---
             alpha = self.ACCEL_LP_ALPHA

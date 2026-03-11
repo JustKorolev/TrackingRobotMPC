@@ -25,7 +25,7 @@ except ImportError:
 
 
 class IMUGUI:
-    def __init__(self, root, shared_state):
+    def __init__(self, root, shared_state, sampling_rate=150):
         self.root = root
         self.root.title("Pixhawk IMU Trajectory Recorder")
         self.shared_state = shared_state
@@ -75,12 +75,13 @@ class IMUGUI:
         self.gyro_bias = np.zeros(3)
         self.accel_bias = np.zeros(3)
         self.gravity_direction = np.array([0.0, 0.0, self.G])
+        self.sampling_rate = sampling_rate # Hz
 
         self.recorded_positions = np.zeros((1, 3))
         self.recorded_times = np.zeros(1)
         self.recorded_orientations = np.zeros((1, 3))
 
-        self.trajectories_dir = r"..\trajectories"
+        self.trajectories_dir = r".\trajectories"
         self.current_trajectory_name = ""
 
         self.raw_t = deque(maxlen=self.MAX_RAW_SAMPLES)
@@ -645,7 +646,7 @@ class IMUGUI:
     def request_data_streams(self):
         if self.mav is None:
             return
-        interval_us = 6667  # 150 Hz
+        interval_us = 10**6 / self.sampling_rate  # 150 Hz
         # Request ALL streams at 150 Hz to ensure ATTITUDE arrives
         self.mav.mav.request_data_stream_send(
             self.mav.target_system,

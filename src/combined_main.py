@@ -12,6 +12,7 @@ import numpy as np
 from src.imu import IMUGUI
 from src.trajectory_tracking import MPCSimulationThread
 
+SAMPLING_RATE = 150 # Hz
 
 class SharedTrajectoryState:
     """Thread-safe shared state for IMU and MPC communication."""
@@ -21,6 +22,7 @@ class SharedTrajectoryState:
 
         # Trajectory data
         self.following_trajectory = False
+        self.trajectory_window = []
 
     def start_following(self):
         """Start trajectory following (called by MPC)."""
@@ -33,10 +35,12 @@ class SharedTrajectoryState:
             self.following_trajectory = False
 
 
+
+
 def run_imu_gui(shared_state):
     """Run the IMU GUI in the main thread (required for Tkinter)."""
     root = tk.Tk()
-    app = IMUGUI(root, shared_state)
+    app = IMUGUI(root, shared_state, SAMPLING_RATE)
     root.mainloop()
 
 
@@ -57,7 +61,7 @@ def run_mpc_background(shared_state, status_callback=None):
             status_callback("MPC: Trajectory following activated, starting simulation...")
 
         # Create and start MPC simulation thread
-        sim_thread = MPCSimulationThread(shared_state=shared_state, mpc_horizon=1)
+        sim_thread = MPCSimulationThread(shared_state=shared_state, mpc_horizon=1, dt=1/SAMPLING_RATE)
         sim_thread.start()
 
         # Monitor the thread

@@ -8,13 +8,14 @@ from src.simulation import EmbeddedSimEnvironment
 
 
 class MPCSimulationThread(threading.Thread):
-    def __init__(self, shared_state, mpc_horizon=1):
+    def __init__(self, shared_state, mpc_horizon=1, dt=0.01):
         super().__init__(daemon=True)
         self.mpc_horizon = mpc_horizon
         self.results = {'t': None, 'y': None, 'u': None}
         self.status = "idle"  # idle, running, completed, error
         self.error_msg = None
         self.shared_state = shared_state
+        self.dt = dt
 
     def run(self):
         try:
@@ -22,7 +23,7 @@ class MPCSimulationThread(threading.Thread):
             print("[MPC Thread] Starting simulation...")
 
             # Q1
-            ur10e = UR10e()
+            ur10e = UR10e(dt=self.dt)
 
             # Instantiate controller
             x_lim, u_lim, delta_u_lim = ur10e.get_limits()

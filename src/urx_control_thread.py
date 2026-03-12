@@ -3,8 +3,11 @@ import time
 import numpy as np
 import urx
 
+from src.utils import collision_check
+
 class URXControlThread(threading.Thread):
-    def __init__(self, shared_state, robot_ip, hz=100, vj=0.5, aj=0.1):
+    def __init__(self, shared_state, robot_ip, hz=100, vj=0.5, aj=0.1,
+                 joint_pos_limits=None, min_link_dist=0.05):
         super().__init__(daemon=True)
         self.shared_state = shared_state
         self.robot_ip = robot_ip
@@ -13,6 +16,8 @@ class URXControlThread(threading.Thread):
         self.running = True
         self.vj = vj
         self.aj = aj
+        self.joint_pos_limits = joint_pos_limits
+        self.min_link_dist = min_link_dist
 
     def run(self):
         try:
@@ -33,9 +38,25 @@ class URXControlThread(threading.Thread):
                     shutdown = self.shared_state.shutdown
                     enabled = self.shared_state.robot_enabled
                     u_curr = self.shared_state.u_curr.copy()
+                    home_req = self.shared_state.home_requested
 
                 if shutdown:
                     break
+
+                if home_req:
+                    with self.shared_state.lock:
+                        self.shared_state.home_requested = False
+                    try:
+                        home_q = self.shared_state.home_joints.tolist()
+                        print(f"[URX] Moving to home position...")
+                        self.robot.movej(home_q, vel=self.vj, acc=self.aj)
+                        self.shared_state.joint_pos = self.robot.getj()
+                        print(f"[URX] Home reached.")
+                    except Exception as e:
+                        print(f"[URX] Home error: {e}")
+                    with self.shared_state.lock:
+                        self.shared_state.robot_enabled = False
+                    continue
 
                 try:
                     if enabled:
@@ -67,12 +88,20 @@ class URXControlThread(threading.Thread):
 
     def send_command(self, u):
         cmd = np.array(u).reshape(-1)
+        joint_vels = np.clip(cmd, -self.vj, self.vj)
 
-        joint_vels = cmd.tolist()
-        joint_vels = np.clip(joint_vels, -self.vj, self.vj).tolist()
+        if self.shared_state.joint_pos is not None and self.joint_pos_limits is not None:
+            theta_pred = np.array(self.shared_state.joint_pos) + joint_vels * self.dt
+            safe, reason = collision_check(
+                self.shared_state._collision_robot, theta_pred,
+                self.joint_pos_limits, self.min_link_dist)
+            if not safe:
+                self.send_zero()
+                self.shared_state.hard_stop(reason)
+                return
 
         self.robot.speedj(
-            joint_vels,
+            joint_vels.tolist(),
             acc=self.aj,
             min_time=self.dt
         )

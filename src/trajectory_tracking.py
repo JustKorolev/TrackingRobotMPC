@@ -46,8 +46,8 @@ class MPCSimulationThread(threading.Thread):
                                                       controller=tracking_ctl.mpc_controller,
                                                       shared_state=self.shared_state)
 
-            x0 = ur10e.get_initial_pose()
-            print("[MPC Thread] Running simulation...")
+            x0 = np.array(self.shared_state.trajectory_window[0])
+            print(f"[MPC Thread] Starting from first trajectory point: {np.degrees(x0).round(1)}")
             t, y, u = sim_env_tracking.run(x0)
 
             self.results = {'t': t, 'y': y, 'u': u, 'env': sim_env_tracking}

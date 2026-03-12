@@ -176,6 +176,11 @@ class IMUGUI:
         self.stop_follow_btn = ttk.Button(top, text="Stop Following", command=self.shared_state.stop_following)
         self.stop_follow_btn.grid(row=5, column=3, padx=5, pady=(10, 0), sticky="w")
 
+        self.home_btn = tk.Button(top, text="Home Arm", command=self.shared_state.request_home,
+                                  bg="#4CAF50", fg="white", font=("TkDefaultFont", 9, "bold"),
+                                  activebackground="#388E3C", activeforeground="white")
+        self.home_btn.grid(row=5, column=4, padx=5, pady=(10, 0), sticky="w")
+
         ttk.Label(top, text="Plot Trajectory").grid(row=6, column=0, sticky="w", pady=(10, 0))
         self.plot_traj_var = tk.StringVar()
         self.plot_combo = ttk.Combobox(top, textvariable=self.plot_traj_var, width=12, state="readonly")
@@ -205,6 +210,20 @@ class IMUGUI:
         self.status_var = tk.StringVar(value="Status: Disconnected")
         self.status_label = ttk.Label(top, textvariable=self.status_var, foreground="blue")
         self.status_label.grid(row=9, column=0, columnspan=4, sticky="w", pady=(12, 0))
+
+        self.collision_var = tk.StringVar(value="")
+        self.collision_label = tk.Label(top, textvariable=self.collision_var,
+                                        fg="red", font=("TkDefaultFont", 10, "bold"))
+        self.collision_label.grid(row=10, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+        self.clear_collision_btn = tk.Button(
+            top, text="Clear Collision", command=self._clear_collision,
+            bg="#F44336", fg="white", font=("TkDefaultFont", 9, "bold"),
+            activebackground="#D32F2F", activeforeground="white")
+        self.clear_collision_btn.grid(row=10, column=4, padx=5, pady=(4, 0), sticky="w")
+        self.clear_collision_btn.grid_remove()
+
+        self._poll_collision_status()
 
         self.fig = plt.Figure(figsize=(10, 7), dpi=100)
         self.ax_raw = self.fig.add_subplot(2, 1, 1)
@@ -1409,17 +1428,47 @@ class IMUGUI:
     def _pose_to_joint_angles(self, position, orientation):
         """Convert IMU world-frame pose to UR10e joint angles.
 
-        Applies the workspace offset (same as ur10e.py line 215) to shift
-        the IMU-relative position into the robot's reachable space, then
-        calls the analytical IK.  Returns None if the pose is unreachable.
+        Skips IK entirely if the pose hasn't changed meaningfully (deadband),
+        preventing wrist-singularity jumps when the IMU is stationary.
+        Builds the 4x4 transform from Euler angles and picks the closest
+        of 4 IK branches to the previous config.
         """
-        pose6 = np.concatenate([position, orientation])
-        T = self._workspace_offset @ ur_utils.pose6_to_T(pose6)
+        if self._last_valid_joints is not None:
+            pos_change = np.linalg.norm(position - self._last_ik_pos)
+            ori_change = np.linalg.norm(orientation - self._last_ik_ori)
+            if pos_change < 0.001 and ori_change < 0.001:
+                return self._last_valid_joints.copy()
+
+        self._last_ik_pos = position.copy()
+        self._last_ik_ori = orientation.copy()
+
+        R = self.rotation_matrix(orientation[0], orientation[1], orientation[2])
+        T_body = np.eye(4)
+        T_body[:3, :3] = R
+        T_body[:3, 3] = position
+        T = self._workspace_offset @ T_body
         try:
-            joints = self._ik_robot.IK("elbow_up", T)
-            if np.any(np.isnan(joints)):
+            candidates = []
+            for sol_type in ('elbow_up', 'elbow_down', 'elbow_up_2', 'elbow_down_2'):
+                try:
+                    sol = self._ik_robot.IK(sol_type, T)
+                    if not np.any(np.isnan(sol)):
+                        candidates.append(sol)
+                except Exception:
+                    continue
+            if not candidates:
                 return None
-            return joints
+            if self._last_valid_joints is None:
+                return candidates[0]
+            best = None
+            best_dist = np.inf
+            for c in candidates:
+                delta = (c - self._last_valid_joints + np.pi) % (2 * np.pi) - np.pi
+                dist = np.linalg.norm(delta)
+                if dist < best_dist:
+                    best_dist = dist
+                    best = c
+            return best
         except Exception:
             return None
 
@@ -1429,6 +1478,9 @@ class IMUGUI:
 
         self._ik_robot = UR10e(dt=1.0 / self.sampling_rate)
         self._last_valid_joints = None
+        self._last_ik_pos = np.zeros(3)
+        self._last_ik_ori = np.zeros(3)
+        self._ik_warmup_samples = 0
 
         prev_t = None
         position = np.zeros(3)
@@ -1549,11 +1601,14 @@ class IMUGUI:
 
                 position = position + velocity * dt
 
-                joints = self._pose_to_joint_angles(position, orientation)
-                if joints is not None:
-                    self._last_valid_joints = joints.copy()
-                else:
+                if stream_count < self._ik_warmup_samples:
                     joints = self._last_valid_joints.copy()
+                else:
+                    joints = self._pose_to_joint_angles(position, orientation)
+                    if joints is not None:
+                        self._last_valid_joints = joints.copy()
+                    else:
+                        joints = self._last_valid_joints.copy()
 
                 prev_joints = self.shared_state._last_joint_target
                 self.shared_state.append_joint_target(joints, dt)
@@ -1764,6 +1819,24 @@ class IMUGUI:
             self.line_gx, self.line_gy, self.line_gz,
             self.traj_line, self.traj_point
         )
+
+    def _poll_collision_status(self):
+        """Periodically check shared_state for collision and update the GUI."""
+        with self.shared_state.lock:
+            detected = self.shared_state.collision_detected
+            reason = self.shared_state.collision_reason
+
+        if detected:
+            self.collision_var.set(f"COLLISION: {reason}")
+            self.clear_collision_btn.grid()
+        else:
+            self.collision_var.set("")
+            self.clear_collision_btn.grid_remove()
+
+        self.root.after(200, self._poll_collision_status)
+
+    def _clear_collision(self):
+        self.shared_state.clear_collision()
 
     def on_close(self):
         self.running = False

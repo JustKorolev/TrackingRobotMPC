@@ -35,6 +35,113 @@ def SafetyCheck(robot, theta_1_6, T6t=None) -> bool:
     return True
 
 
+def segment_segment_distance(p1, p2, p3, p4):
+    """Minimum distance between line segment p1-p2 and segment p3-p4.
+
+    Uses the standard closest-point algorithm with clamping to [0,1].
+    """
+    d1 = p2 - p1
+    d2 = p4 - p3
+    r = p1 - p3
+
+    a = float(np.dot(d1, d1))
+    e = float(np.dot(d2, d2))
+    f = float(np.dot(d2, r))
+
+    EPS = 1e-12
+
+    if a < EPS and e < EPS:
+        return float(np.linalg.norm(r))
+
+    if a < EPS:
+        s = 0.0
+        t = np.clip(f / e, 0.0, 1.0)
+    else:
+        c = float(np.dot(d1, r))
+        if e < EPS:
+            t = 0.0
+            s = np.clip(-c / a, 0.0, 1.0)
+        else:
+            b = float(np.dot(d1, d2))
+            denom = a * e - b * b
+            if abs(denom) > EPS:
+                s = np.clip((b * f - c * e) / denom, 0.0, 1.0)
+            else:
+                s = 0.0
+            t = (b * s + f) / e
+
+            if t < 0.0:
+                t = 0.0
+                s = np.clip(-c / a, 0.0, 1.0)
+            elif t > 1.0:
+                t = 1.0
+                s = np.clip((b - c) / a, 0.0, 1.0)
+
+    closest1 = p1 + s * d1
+    closest2 = p3 + t * d2
+    return float(np.linalg.norm(closest1 - closest2))
+
+
+_COLLISION_PAIRS = [
+    (0, 2), (0, 3), (0, 4), (0, 5),
+    (1, 3), (1, 4), (1, 5),
+    (2, 4), (2, 5),
+    (3, 5),
+]
+
+
+def collision_check(robot, theta, joint_pos_limits, min_link_dist=0.05):
+    """Full self-collision and safety check for a set of joint angles.
+
+    Parameters
+    ----------
+    robot          : UR10e instance (needs get_classical_dh_parameters)
+    theta          : (6,) joint angles in radians
+    joint_pos_limits : (6,) per-joint absolute position limits (rad)
+    min_link_dist  : float, minimum allowed distance between non-adjacent
+                     link segments (metres)
+
+    Returns
+    -------
+    (safe: bool, reason: str)
+        safe=True  -> configuration is OK
+        safe=False -> reason explains what failed
+    """
+    theta = np.asarray(theta, dtype=float).reshape(6,)
+
+    for i in range(6):
+        if abs(theta[i]) > joint_pos_limits[i]:
+            return False, (f"Joint {i} at {np.degrees(theta[i]):.1f} deg "
+                           f"exceeds limit {np.degrees(joint_pos_limits[i]):.1f} deg")
+
+    dh = robot.get_classical_dh_parameters(theta)
+    a_vals = np.asarray(dh["a"], dtype=float)
+    d_vals = np.asarray(dh["d"], dtype=float)
+    alpha_vals = dh["alpha"]
+    theta_vals = dh["theta"]
+
+    origins = [np.array([0.0, 0.0, 0.0])]
+    T = np.eye(4)
+    for i in range(6):
+        T = T @ dh_classical_tf(a_vals[i], deg2rad(alpha_vals[i]),
+                                d_vals[i], deg2rad(theta_vals[i]))
+        origin = T[:3, 3].copy()
+        origins.append(origin)
+        if origin[2] < 0:
+            return False, (f"Link {i+1} origin z={origin[2]:.3f} m "
+                           f"is below ground plane")
+
+    for (i, j) in _COLLISION_PAIRS:
+        dist = segment_segment_distance(
+            origins[i], origins[i + 1],
+            origins[j], origins[j + 1])
+        if dist < min_link_dist:
+            return False, (f"Links {i}-{j} distance {dist:.3f} m "
+                           f"< min {min_link_dist:.3f} m")
+
+    return True, ""
+
+
 def rot_x(a_rad: float) -> np.ndarray:
     ca, sa = np.cos(a_rad), np.sin(a_rad)
     return np.array([[1, 0,  0, 0],

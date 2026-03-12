@@ -21,7 +21,10 @@ except ImportError:
 
 SAMPLING_RATE = 50 # Hz
 MPC_HORIZON = SAMPLING_RATE // 50 # sec = horizon_samples / sampling_rate
-WORKSPACE_OFFSET = pose6_to_T([0.5, 0.5, 0.5, 0, 0, 0])
+# The workspace offset MUST place the robot away from wrist singularities.
+# [0.5, 0.5, 0.5, 0, 0, 0] has zero rotation which aligns wrist axes (singular).
+# Adding a small rotation breaks the singularity and makes IK stable.
+WORKSPACE_OFFSET = pose6_to_T([0.5, 0.3, 0.5, 0.1, 0.2, 0])
 
 # ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
 # Hardware max from datasheet:
@@ -41,6 +44,13 @@ JOINT_VEL_LIMITS = np.array([
     VJ,   # joint 4 - wrist 2
     VJ,   # joint 5 - wrist 3
 ])
+
+# Per-joint absolute position limits (rad). UR10e datasheet: ±360 deg.
+# Working limits set to ±350 deg for a safety margin.
+JOINT_POS_LIMITS = np.array([6.1087, 6.1087, 6.1087, 6.1087, 6.1087, 6.1087])
+
+# Minimum allowed distance (m) between non-adjacent link segments.
+MIN_LINK_DISTANCE = 0.05
 
 
 def interpolate_joint_segment(theta_prev, theta_next, dt, v_max):
@@ -100,8 +110,18 @@ class SharedTrajectoryState:
 
         self.u_curr = np.zeros((6, 1))
         self.robot_enabled = False
+        self.robot_connected = False
         self.shutdown = False
         self.joint_pos = None
+        self.home_requested = False
+        self.collision_detected = False
+        self.collision_reason = ""
+
+        # Compute home joint angles from WORKSPACE_OFFSET via IK
+        from src.ur10e import UR10e
+        self._collision_robot = UR10e()
+        self.home_joints = self._collision_robot.IK("elbow_up", WORKSPACE_OFFSET)
+        print(f"[HOME] Home joints (deg): {np.degrees(self.home_joints).round(1)}")
 
         self._last_joint_target = None
 
@@ -141,31 +161,56 @@ class SharedTrajectoryState:
         dropped so the robot jumps ahead to where the user is now
         instead of accumulating unbounded lag.
         """
+        collision_reason = None
+
         with self.lock:
-            if self._last_joint_target is None:
-                self._last_joint_target = theta_next.copy()
-                self.trajectory_queue.append(theta_next)
+            if self.collision_detected:
                 return
 
-            points = interpolate_joint_segment(
-                self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS)
+            if self._last_joint_target is None:
+                safe, reason = collision_check(
+                    self._collision_robot, theta_next,
+                    JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
+                if not safe:
+                    collision_reason = reason
+                else:
+                    self._last_joint_target = theta_next.copy()
+                    self.trajectory_queue.append(theta_next)
+            else:
+                points = interpolate_joint_segment(
+                    self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS)
 
-            if len(points) > 1:
-                delta = theta_next - self._last_joint_target
-                v_req = np.abs(delta) / dt
-                worst = np.argmax(v_req / JOINT_VEL_LIMITS)
-                print(f"[INTERP] Joint {worst} needs "
-                      f"{v_req[worst]:.2f} rad/s (limit {JOINT_VEL_LIMITS[worst]:.2f}), "
-                      f"N={len(points)}")
+                if len(points) > 1:
+                    delta = theta_next - self._last_joint_target
+                    v_req = np.abs(delta) / dt
+                    worst = np.argmax(v_req / JOINT_VEL_LIMITS)
+                    print(f"[INTERP] Joint {worst} needs "
+                          f"{v_req[worst]:.2f} rad/s (limit {JOINT_VEL_LIMITS[worst]:.2f}), "
+                          f"N={len(points)}")
 
-            for pt in points:
-                self.trajectory_queue.append(pt)
+                for pt in points:
+                    safe, reason = collision_check(
+                        self._collision_robot, pt,
+                        JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
+                    if not safe:
+                        collision_reason = reason
+                        break
+                    self.trajectory_queue.append(pt)
 
-            # Prevent unbounded lag: trim oldest points if queue is too long
-            while len(self.trajectory_queue) > MAX_QUEUE_LEN:
-                self.trajectory_queue.popleft()
+                if collision_reason is None:
+                    while len(self.trajectory_queue) > MAX_QUEUE_LEN:
+                        self.trajectory_queue.popleft()
+                    self._last_joint_target = theta_next.copy()
 
-            self._last_joint_target = theta_next.copy()
+        if collision_reason is not None:
+            self.hard_stop(collision_reason)
+
+    def request_home(self):
+        with self.lock:
+            self.home_requested = True
+            self.following_trajectory = False
+            self.robot_enabled = True
+            print(f"[HOME] Homing to {np.degrees(self.home_joints).round(1)} deg")
 
     def start_following(self):
         with self.lock:
@@ -180,6 +225,22 @@ class SharedTrajectoryState:
             self.robot_enabled = False
             self.u_curr = np.zeros((6, 1))
             self._last_joint_target = None
+
+    def hard_stop(self, reason):
+        with self.lock:
+            self.collision_detected = True
+            self.collision_reason = reason
+            self.following_trajectory = False
+            self.robot_enabled = False
+            self.u_curr = np.zeros((6, 1))
+            self._last_joint_target = None
+        print(f"[COLLISION] HARD STOP: {reason}")
+
+    def clear_collision(self):
+        with self.lock:
+            self.collision_detected = False
+            self.collision_reason = ""
+        print("[COLLISION] Cleared.")
 
 
 def run_imu_gui(shared_state):
@@ -296,7 +357,9 @@ def main():
             robot_ip="192.168.1.10",
             hz=100,
             vj=VJ,
-            aj=AJ
+            aj=AJ,
+            joint_pos_limits=JOINT_POS_LIMITS,
+            min_link_dist=MIN_LINK_DISTANCE
         )
         urx_thread.start()
     else:

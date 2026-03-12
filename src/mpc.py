@@ -309,7 +309,6 @@ class MPC(object):
         if self.x_sp is None:
             self.x_sp = np.zeros(self.Nx * (self.Nt + 1))
 
-
         # Initialize variables
         self.optvar_x0 = np.full((1, self.Nx), x0.T)
 

@@ -1555,14 +1555,23 @@ class IMUGUI:
                 else:
                     joints = self._last_valid_joints.copy()
 
+                prev_joints = self.shared_state._last_joint_target
                 self.shared_state.append_joint_target(joints, dt)
                 stream_count += 1
 
-                if stream_count % 100 == 0:
+                if stream_count % 50 == 0:
                     wlen = len(self.shared_state.trajectory_window)
-                    print(f"[STREAM] {stream_count} pts, window={wlen}, "
-                          f"pos=[{position[0]:.3f},{position[1]:.3f},{position[2]:.3f}], "
-                          f"q(deg)={np.degrees(joints).round(1)}")
+                    elapsed_s = stream_count / max(1, self.sampling_rate)
+                    if prev_joints is not None:
+                        v_req = np.abs(joints - prev_joints) / dt
+                        worst_j = np.argmax(v_req)
+                        worst_v = v_req[worst_j]
+                        feasible = "FEASIBLE" if worst_v <= 0.5 else f"INTERP j{worst_j}:{worst_v:.1f}rad/s"
+                    else:
+                        feasible = "INIT"
+                    print(f"[STREAM] t={elapsed_s:.1f}s | {stream_count} pts | "
+                          f"window={wlen} | {feasible} | "
+                          f"pos=[{position[0]:.3f},{position[1]:.3f},{position[2]:.3f}]")
 
         except Exception as e:
             self.set_status(f"Stream error: {e}")

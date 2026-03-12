@@ -72,6 +72,8 @@ def interpolate_joint_segment(theta_prev, theta_next, dt, v_max):
     contains only theta_next.
     """
     delta = theta_next - theta_prev
+    delta = (delta + np.pi) % (2 * np.pi) - np.pi
+
     if dt <= 0:
         return [theta_next]
 
@@ -86,7 +88,9 @@ def interpolate_joint_segment(theta_prev, theta_next, dt, v_max):
 
     points = []
     for i in range(1, N + 1):
-        points.append(theta_prev + (i / N) * delta)
+        pt = theta_prev + (i / N) * delta
+        pt = (pt + np.pi) % (2 * np.pi) - np.pi
+        points.append(pt)
     return points
 
 

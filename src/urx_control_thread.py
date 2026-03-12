@@ -70,7 +70,6 @@ class URXControlThread(threading.Thread):
 
         joint_vels = cmd.tolist()
         joint_vels = np.clip(joint_vels, -self.vj, self.vj).tolist()
-        print(joint_vels)
 
         self.robot.speedj(
             joint_vels,

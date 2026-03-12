@@ -27,22 +27,23 @@ except ImportError:
 
 
 class IMUGUI:
-    def __init__(self, root, shared_state, sampling_rate=150, mpc_horizon=1, workspace_offset=np.eye(4,4)):
+    def __init__(self, root, shared_state, sampling_rate=50, mpc_horizon=1, workspace_offset=np.eye(4,4)):
         self.root = root
         self.root.title("Pixhawk IMU Trajectory Recorder")
         self.shared_state = shared_state
         self._workspace_offset = workspace_offset
 
         self.G = 9.80665
-        self.ACCEL_DEADBAND = 0.01
+        self.ACCEL_DEADBAND = 0.005
         self.VEL_DEADBAND = 0.001
         self.GYRO_STATIONARY_THRESH = 0.03
-        self.ACCEL_STATIONARY_MAG_THRESH = 0.15
-        self.MAX_VELOCITY = 0.5
-        self.VELOCITY_DECAY = 0.995
-        self.ACCEL_LP_ALPHA = 0.2
+        self.ACCEL_STATIONARY_MAG_THRESH = 0.5
+        self.MAX_VELOCITY = 1.0
+        self.ACCEL_LP_ALPHA = 0.7
         self.ACCEL_CORRECTION_GAIN = 1.5
         self.GYRO_BIAS_ALPHA = 0.01
+        self.ZUPT_LIN_ACCEL_THRESH = 0.04
+        self.ZUPT_REQUIRED_SAMPLES = 15
         self.MAX_RAW_SAMPLES = 500
 
         # --- Robot base frame to IMU world frame transform ---
@@ -65,7 +66,6 @@ class IMUGUI:
         self._pixhawk_R_enu = np.eye(3)
         self._has_pixhawk_attitude = False
         self._attitude_count = 0
-        self._FRD_TO_RFU = np.array([[0.,1.,0.],[1.,0.,0.],[0.,0.,-1.]])
         self.running = True
 
         self.state_lock = threading.Lock()
@@ -682,14 +682,12 @@ class IMUGUI:
     def request_data_streams(self):
         if self.mav is None:
             return
-        interval_us = 10**6 / self.sampling_rate  # 150 Hz
-        # Request ALL streams at 150 Hz to ensure ATTITUDE arrives
+        interval_us = int(10**6 / self.sampling_rate)
         self.mav.mav.request_data_stream_send(
             self.mav.target_system,
             self.mav.target_component,
             mavutil.mavlink.MAV_DATA_STREAM_ALL,
-            150, 1)
-        # Also request specific messages at 150 Hz via SET_MESSAGE_INTERVAL
+            self.sampling_rate, 1)
         # 30=ATTITUDE, 31=ATTITUDE_QUATERNION, 105=HIGHRES_IMU, 116=SCALED_IMU2
         for msg_id in (30, 31, 105, 116):
             self.mav.mav.command_long_send(
@@ -909,34 +907,28 @@ class IMUGUI:
 
     def _parse_highres_imu(self, msg):
         t_us = msg.time_usec
-        # Pixhawk FRD -> user RFU (X=right, Y=front, Z=up)
-        ax = msg.yacc
-        ay = msg.xacc
-        az = -msg.zacc
-        gx = msg.ygyro
-        gy = msg.xgyro
-        gz = -msg.zgyro
-        return (t_us, ax, ay, az, gx, gy, gz)
+        a_user = self._map_pixhawk_vec_to_user([msg.xacc, msg.yacc, msg.zacc])
+        g_user = self._map_pixhawk_vec_to_user([msg.xgyro, msg.ygyro, msg.zgyro])
+        return (t_us, a_user[0], a_user[1], a_user[2],
+                g_user[0], g_user[1], g_user[2])
 
     def _parse_scaled_imu(self, msg):
         t_us = msg.time_boot_ms * 1000
-        ax = msg.yacc * self.G / 1000.0
-        ay = msg.xacc * self.G / 1000.0
-        az = -msg.zacc * self.G / 1000.0
-        gx = msg.ygyro / 1000.0
-        gy = msg.xgyro / 1000.0
-        gz = -msg.zgyro / 1000.0
-        return (t_us, ax, ay, az, gx, gy, gz)
+        a_native = np.array([msg.xacc, msg.yacc, msg.zacc], dtype=float) * self.G / 1000.0
+        g_native = np.array([msg.xgyro, msg.ygyro, msg.zgyro], dtype=float) / 1000.0
+        a_user = self._map_pixhawk_vec_to_user(a_native)
+        g_user = self._map_pixhawk_vec_to_user(g_native)
+        return (t_us, a_user[0], a_user[1], a_user[2],
+                g_user[0], g_user[1], g_user[2])
 
     def _parse_raw_imu(self, msg):
         t_us = msg.time_usec
-        ax = msg.yacc * self.G / 1000.0
-        ay = msg.xacc * self.G / 1000.0
-        az = -msg.zacc * self.G / 1000.0
-        gx = msg.ygyro / 1000.0
-        gy = msg.xgyro / 1000.0
-        gz = -msg.zgyro / 1000.0
-        return (t_us, ax, ay, az, gx, gy, gz)
+        a_native = np.array([msg.xacc, msg.yacc, msg.zacc], dtype=float) * self.G / 1000.0
+        g_native = np.array([msg.xgyro, msg.ygyro, msg.zgyro], dtype=float) / 1000.0
+        a_user = self._map_pixhawk_vec_to_user(a_native)
+        g_user = self._map_pixhawk_vec_to_user(g_native)
+        return (t_us, a_user[0], a_user[1], a_user[2],
+                g_user[0], g_user[1], g_user[2])
 
     def read_one_sample(self):
         if self.mav is None:
@@ -951,18 +943,16 @@ class IMUGUI:
                 msg_type = msg.get_type()
 
                 if msg_type == 'ATTITUDE':
-                    M = self._FRD_TO_RFU
                     R_ned = self.rotation_matrix(msg.roll, msg.pitch, msg.yaw)
-                    self._pixhawk_R_enu = M @ R_ned @ M
+                    self._pixhawk_R_enu = self._map_pixhawk_attitude_to_user(R_ned)
                     self._has_pixhawk_attitude = True
                     self._attitude_count += 1
                     continue
 
                 if msg_type == 'ATTITUDE_QUATERNION':
-                    M = self._FRD_TO_RFU
-                    q = np.array([msg.q1, msg.q2, msg.q3, msg.q4])
+                    q = np.array([msg.q1, msg.q2, msg.q3, msg.q4], dtype=float)
                     R_ned = self.quat_to_rotation_matrix(q)
-                    self._pixhawk_R_enu = M @ R_ned @ M
+                    self._pixhawk_R_enu = self._map_pixhawk_attitude_to_user(R_ned)
                     self._has_pixhawk_attitude = True
                     self._attitude_count += 1
                     continue
@@ -1082,6 +1072,21 @@ class IMUGUI:
             z = 0.25 * s
         q = np.array([w, x, y, z])
         return q / np.linalg.norm(q)
+
+    # ------------------------------------------------------------------ #
+    #  Pixhawk FRD/NED  <->  User RFU/ENU  frame mapping                 #
+    # ------------------------------------------------------------------ #
+
+    _C_PIX_TO_USER = np.array([[0., 1., 0.],
+                                [1., 0., 0.],
+                                [0., 0., -1.]])
+
+    def _map_pixhawk_vec_to_user(self, v):
+        return self._C_PIX_TO_USER @ np.asarray(v, dtype=float)
+
+    def _map_pixhawk_attitude_to_user(self, R_ned):
+        C = self._C_PIX_TO_USER
+        return C @ np.asarray(R_ned, dtype=float) @ C.T
 
     # ------------------------------------------------------------------ #
     #  Robot base frame <-> IMU world frame transform                     #
@@ -1212,9 +1217,8 @@ class IMUGUI:
         if acc_norm < 1e-6:
             raise RuntimeError("Bad accelerometer calibration: near-zero acceleration detected.")
 
-        gravity_body = self.G * acc_mean / acc_norm
-        accel_bias = acc_mean - gravity_body
-        self.gravity_direction = gravity_body.copy()
+        self.gravity_direction = self.G * acc_mean / acc_norm
+        accel_bias = acc_mean - self.gravity_direction
 
         final_rate = len(samples) / elapsed_total
         self.set_status(f"Calibration complete: {len(samples)} samples at {final_rate:.1f} Hz")
@@ -1336,6 +1340,7 @@ class IMUGUI:
 
         gyro_bias_online = np.zeros(3)
         accel_lp = np.zeros(3)
+        zupt_count = 0
 
         for i in range(1, n):
             dt = times[i] - times[i - 1]
@@ -1364,8 +1369,8 @@ class IMUGUI:
             if use_ekf and not np.array_equal(ekf_rotations[i], ekf_rotations[i - 1]):
                 q = self.rotation_matrix_to_quat(ekf_rotations[i])
 
-            # --- tilt correction from accel (only when still, fallback) ---
-            if is_still:
+            # --- tilt correction from accel (only when still AND no EKF) ---
+            if is_still and not use_ekf:
                 accel_norm = np.linalg.norm(accels[i])
                 if accel_norm > 1e-6:
                     R_cur = self.quat_to_rotation_matrix(q)
@@ -1384,7 +1389,15 @@ class IMUGUI:
 
             # --- gravity removal & transform to nav frame ---
             gravity_body = R_enu_t.T @ gravity_enu
-            a_lin_nav = R_nb @ (accels[i] - gravity_body)
+            lin_body = accels[i] - gravity_body
+            a_lin_nav = R_nb @ lin_body
+
+            if i % 100 == 0:
+                print(f"[GRAV CHECK i={i}] "
+                      f"accel={accels[i].round(3)} "
+                      f"grav_body={gravity_body.round(3)} "
+                      f"lin_body={lin_body.round(3)} "
+                      f"a_lin_nav={a_lin_nav.round(3)}")
 
             # --- euler angles (relative to start) ---
             orientations[i, 0] = np.arctan2(R_nb[2, 1], R_nb[2, 2])
@@ -1399,17 +1412,20 @@ class IMUGUI:
             accel_use = accel_lp.copy()
             accel_use[np.abs(accel_use) < self.ACCEL_DEADBAND] = 0.0
 
-            # --- ZUPT first, then integrate ---
-            if is_still:
+            # --- window-based ZUPT ---
+            lin_accel_mag = np.linalg.norm(accel_use)
+            gyro_mag = np.linalg.norm(omega)
+            if lin_accel_mag < self.ZUPT_LIN_ACCEL_THRESH and gyro_mag < self.GYRO_STATIONARY_THRESH:
+                zupt_count += 1
+            else:
+                zupt_count = 0
+
+            if zupt_count >= self.ZUPT_REQUIRED_SAMPLES:
                 velocities[i] = np.zeros(3)
             else:
                 velocities[i] = velocities[i - 1] + accel_use * dt
-                velocities[i] *= self.VELOCITY_DECAY
-
                 vel_mag = np.linalg.norm(velocities[i])
-                if vel_mag < self.VEL_DEADBAND:
-                    velocities[i] = np.zeros(3)
-                elif vel_mag > self.MAX_VELOCITY:
+                if vel_mag > self.MAX_VELOCITY:
                     velocities[i] *= self.MAX_VELOCITY / vel_mag
 
             positions[i] = (positions[i - 1]
@@ -1488,6 +1504,7 @@ class IMUGUI:
         orientation = np.zeros(3)
         gyro_bias_online = np.zeros(3)
         accel_lp = np.zeros(3)
+        zupt_count = 0
         stream_count = 0
 
         q = None
@@ -1560,7 +1577,7 @@ class IMUGUI:
                 if self._has_pixhawk_attitude:
                     q = self.rotation_matrix_to_quat(self._pixhawk_R_enu.copy())
 
-                if is_still:
+                if is_still and not self._has_pixhawk_attitude:
                     accel_norm = np.linalg.norm(accel)
                     if accel_norm > 1e-6:
                         R_cur = self.quat_to_rotation_matrix(q)
@@ -1589,14 +1606,19 @@ class IMUGUI:
                 accel_use = accel_lp.copy()
                 accel_use[np.abs(accel_use) < self.ACCEL_DEADBAND] = 0.0
 
-                if is_still:
+                lin_accel_mag = np.linalg.norm(accel_use)
+                gyro_mag = np.linalg.norm(omega)
+                if lin_accel_mag < self.ZUPT_LIN_ACCEL_THRESH and gyro_mag < self.GYRO_STATIONARY_THRESH:
+                    zupt_count += 1
+                else:
+                    zupt_count = 0
+
+                if zupt_count >= self.ZUPT_REQUIRED_SAMPLES:
                     velocity[:] = 0.0
                 else:
                     velocity = velocity + accel_use * dt
                     vel_mag = np.linalg.norm(velocity)
-                    if vel_mag < self.VEL_DEADBAND:
-                        velocity[:] = 0.0
-                    elif vel_mag > self.MAX_VELOCITY:
+                    if vel_mag > self.MAX_VELOCITY:
                         velocity *= self.MAX_VELOCITY / vel_mag
 
                 position = position + velocity * dt

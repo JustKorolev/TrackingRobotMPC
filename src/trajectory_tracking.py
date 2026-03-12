@@ -8,7 +8,7 @@ from src.simulation import EmbeddedSimEnvironment
 
 
 class MPCSimulationThread(threading.Thread):
-    def __init__(self, shared_state, mpc_horizon=1, dt=0.01, vj=0.5, aj=1):
+    def __init__(self, shared_state, mpc_horizon=1, dt=0.01, vj=0.5, aj=1, workspace_offset=np.eye(4,4)):
         super().__init__(daemon=True)
         self.mpc_horizon = mpc_horizon
         self.results = {'t': None, 'y': None, 'u': None}
@@ -18,6 +18,7 @@ class MPCSimulationThread(threading.Thread):
         self.dt = dt
         self.vj = vj
         self.aj = aj
+        self.workspace_offset = workspace_offset
 
     def run(self):
         try:
@@ -25,7 +26,7 @@ class MPCSimulationThread(threading.Thread):
             print("[MPC Thread] Starting simulation...")
 
             # Q1
-            ur10e = UR10e(dt=self.dt)
+            ur10e = UR10e(dt=self.dt, workspace_offset=self.workspace_offset)
 
             # Instantiate controller
             x_lim, u_lim, acc_u_lim = ur10e.get_limits(self.vj, self.aj)

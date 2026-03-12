@@ -9,7 +9,7 @@ import time
 import tkinter as tk
 import numpy as np
 from collections import deque
-
+from src.utils import *
 from src.imu import IMUGUI
 from src.trajectory_tracking import MPCSimulationThread
 
@@ -21,6 +21,7 @@ except ImportError:
 
 SAMPLING_RATE = 50 # Hz
 MPC_HORIZON = SAMPLING_RATE // 50 # sec = horizon_samples / sampling_rate
+WORKSPACE_OFFSET = pose6_to_T([0.5, 0.5, 0.5, 0, 0, 0])
 
 # ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
 # Hardware max from datasheet:
@@ -28,7 +29,7 @@ MPC_HORIZON = SAMPLING_RATE // 50 # sec = horizon_samples / sampling_rate
 #   Joints 2-5 (elbow, wrists):  3.142 rad/s  (180 deg/s)
 # Working limits (conservative for safety):
 VJ = 1   # rad/s  -- uniform working velocity limit for MPC
-AJ = 1.0   # rad/s² -- uniform working acceleration limit for MPC
+AJ = 2.0   # rad/s² -- uniform working acceleration limit for MPC
 
 # Per-joint working velocity limits (rad/s).
 # UPDATE THESE when you know exact per-joint limits for your setup.
@@ -39,19 +40,6 @@ JOINT_VEL_LIMITS = np.array([
     VJ,   # joint 3 - wrist 1
     VJ,   # joint 4 - wrist 2
     VJ,   # joint 5 - wrist 3
-])
-
-# Cartesian velocity limits for pre-IK interpolation [x,y,z,roll,pitch,yaw].
-# Position channels (m/s) match robot Cartesian speed.
-# Orientation channels (rad/s) are generous -- real enforcement happens
-# in joint space after IK using JOINT_VEL_LIMITS above.
-CART_VEL_LIMITS = np.array([
-    0.5,   # x  (m/s)
-    0.5,   # y  (m/s)
-    0.5,   # z  (m/s)
-    5.0,   # roll  (rad/s)
-    5.0,   # pitch (rad/s)
-    5.0,   # yaw   (rad/s)
 ])
 
 
@@ -197,7 +185,7 @@ class SharedTrajectoryState:
 def run_imu_gui(shared_state):
     """Run the IMU GUI in the main thread (required for Tkinter)."""
     root = tk.Tk()
-    app = IMUGUI(root, shared_state, SAMPLING_RATE, MPC_HORIZON)
+    app = IMUGUI(root, shared_state, SAMPLING_RATE, MPC_HORIZON, WORKSPACE_OFFSET)
     root.mainloop()
 
 
@@ -227,7 +215,8 @@ def run_mpc_background(shared_state, mpc_horizon, status_callback=None):
                         sim_thread = MPCSimulationThread(
                             shared_state=shared_state,
                             mpc_horizon=mpc_horizon,
-                            dt= 1 / SAMPLING_RATE
+                            dt= 1 / SAMPLING_RATE,
+                            workspace_offset=WORKSPACE_OFFSET
                         )
                         sim_thread.start()
                     else:

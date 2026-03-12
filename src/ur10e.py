@@ -4,7 +4,7 @@ import src.utils as utils
 import os
 
 class UR10e():
-    def __init__(self, dt=0.01):
+    def __init__(self, dt=0.01, workspace_offset=np.eye(4,4)):
         # Kinematics
         self.dof = 6
         self.link_lengths = [0.1273, 0.612, 0.5723, 0.163941, 0.1157, 0.0922] # in meters
@@ -19,6 +19,7 @@ class UR10e():
 
         self.pose_trajectory = None
         self.joint_trajectory = None
+        self.workspace_offset = workspace_offset
 
     class DHParameters(TypedDict):
         theta: float  # in degrees
@@ -232,7 +233,9 @@ class UR10e():
         :return: starting state
         :rtype: np.ndarray
         """
-        x0 = np.array([-2.58636783, 1.64280682, 2.07696395, -2.64554437, 1.64949147, 2.25229027]) # TODO: SET THIS TO WHATEVER WE DECIDE OUR CONSTANT INITIAL POSE TO BE
+        T = self.workspace_offset
+        x0 = self.IK("elbow_up", T)
+        print(x0)
         return x0
 
 if __name__ == "__main__":

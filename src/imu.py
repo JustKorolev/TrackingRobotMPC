@@ -27,10 +27,11 @@ except ImportError:
 
 
 class IMUGUI:
-    def __init__(self, root, shared_state, sampling_rate=150, mpc_horizon=1):
+    def __init__(self, root, shared_state, sampling_rate=150, mpc_horizon=1, workspace_offset=np.eye(4,4)):
         self.root = root
         self.root.title("Pixhawk IMU Trajectory Recorder")
         self.shared_state = shared_state
+        self._workspace_offset = workspace_offset
 
         self.G = 9.80665
         self.ACCEL_DEADBAND = 0.01
@@ -55,7 +56,7 @@ class IMUGUI:
 
         self.MAX_LINEAR_VELOCITY = 0.5
         self.MAX_LINEAR_ACCELERATION = 2.0
-        self.MAX_ANGULAR_VELOCITY = 1.0
+        self.MAX_ANGULAR_VELOCITY = 2.0
         self.MAX_ANGULAR_ACCELERATION = 5.0
         self.TRAJECTORY_SMOOTHING = True
 
@@ -1427,7 +1428,6 @@ class IMUGUI:
         print("[STREAM] Trajectory streaming started")
 
         self._ik_robot = UR10e(dt=1.0 / self.sampling_rate)
-        self._workspace_offset = ur_utils.pose6_to_T([0.5, 0.5, 0.5, 0, 0, 0])
         self._last_valid_joints = None
 
         prev_t = None

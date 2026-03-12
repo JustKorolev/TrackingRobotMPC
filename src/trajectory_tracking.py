@@ -8,7 +8,7 @@ from src.simulation import EmbeddedSimEnvironment
 
 
 class MPCSimulationThread(threading.Thread):
-    def __init__(self, shared_state, mpc_horizon=1, dt=0.01):
+    def __init__(self, shared_state, mpc_horizon=1, dt=0.01, vj=0.5, aj=1):
         super().__init__(daemon=True)
         self.mpc_horizon = mpc_horizon
         self.results = {'t': None, 'y': None, 'u': None}
@@ -16,6 +16,8 @@ class MPCSimulationThread(threading.Thread):
         self.error_msg = None
         self.shared_state = shared_state
         self.dt = dt
+        self.vj = vj
+        self.aj = aj
 
     def run(self):
         try:
@@ -26,7 +28,7 @@ class MPCSimulationThread(threading.Thread):
             ur10e = UR10e(dt=self.dt)
 
             # Instantiate controller
-            x_lim, u_lim, delta_u_lim = ur10e.get_limits()
+            x_lim, u_lim, acc_u_lim = ur10e.get_limits(self.vj, self.aj)
 
             # Create MPC Solver
             tracking_ctl = MPC(model=ur10e,
@@ -35,7 +37,8 @@ class MPCSimulationThread(threading.Thread):
                                N=self.mpc_horizon,
                                xlb=-x_lim, xub=x_lim,
                                ulb=-u_lim, uub=u_lim,
-                               delta_ulb=-delta_u_lim, delta_uub=delta_u_lim)
+                               acc_ulb=-acc_u_lim, acc_uub=acc_u_lim,
+                               shared_state=self.shared_state)
 
             sim_env_tracking = EmbeddedSimEnvironment(model=ur10e,
                                                       dynamics=ur10e.model,
@@ -48,6 +51,8 @@ class MPCSimulationThread(threading.Thread):
 
             self.results = {'t': t, 'y': y, 'u': u, 'env': sim_env_tracking}
             self.status = "completed"
+            sim_env_tracking.visualize()
+            sim_env_tracking.visualize_error()
             print("[MPC Thread] Simulation completed successfully!")
 
         except Exception as e:

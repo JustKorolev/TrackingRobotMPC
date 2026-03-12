@@ -32,12 +32,12 @@ class UR10e():
         d_i: float  # in meters
         theta_i: float  # in degrees
 
-    def get_limits(self):
+    def get_limits(self, vj, aj):
         x_lim = 2*np.pi * np.ones(6) # radians
-        u_lim = 0.5 * np.ones(6) # radians/sec
-        delta_u_lim = 1 * np.ones(6) # radians/sec²
+        u_lim = vj * np.ones(6) # radians/sec
+        acc_u_lim = aj * np.ones(6) # radians/sec²
 
-        return x_lim, u_lim, delta_u_lim
+        return x_lim, u_lim, acc_u_lim
 
     def get_classical_dh_parameters(self, joint_angles) -> DHParameters:
         alpha = [90, 0, 0, 90, -90, 0]
@@ -219,14 +219,6 @@ class UR10e():
             joint_trajectory = np.array(joint_trajectory)
             self.trajectory = joint_trajectory.T
 
-            save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/joint_traj_4.txt")
-
-            # Save with each row = timestep, each column = joint
-            np.savetxt(save_path, self.trajectory.T, fmt="%.8f")
-
-            print(self.trajectory[:, -1])
-
-
         id_s = int(round(t / self.dt))
         id_e = int(round(t / self.dt)) + npoints
         x_r = self.trajectory[:, id_s:id_e]
@@ -240,7 +232,7 @@ class UR10e():
         :return: starting state
         :rtype: np.ndarray
         """
-        x0 = np.array([-2.58636783, 1.64280682, 2.07696395, -2.64554437, 1.64949147, 2.25229027])
+        x0 = np.array([-2.58636783, 1.64280682, 2.07696395, -2.64554437, 1.64949147, 2.25229027]) # TODO: SET THIS TO WHATEVER WE DECIDE OUR CONSTANT INITIAL POSE TO BE
         return x0
 
 if __name__ == "__main__":

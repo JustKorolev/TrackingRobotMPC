@@ -18,9 +18,9 @@ class MPC(object):
                  param='P1', N=10,
                  xlb=None, xub=None,
                  ulb=None, uub=None,
-                 delta_ulb=None, delta_uub=None,
+                 acc_ulb=None, acc_uub=None,
                  terminal_constraint=None, solver_opts=None,
-                 tuning_file=None):
+                 tuning_file=None, shared_state=None):
         """
         Constructor for the MPC class.
         """
@@ -33,11 +33,13 @@ class MPC(object):
         self.Nt = N
         print("Horizon steps: ", N * self.dt)
         self.dynamics = dynamics
+        self.shared_state = shared_state
 
         # Initialize variables
         self.set_cost_functions()
         self.x_sp = None
         self.u_sp = None
+        self.u_prev = np.zeros(self.Nu)
 
         # Cost function weights
         Q, R, P = self.load_params(param, tuning_file)
@@ -54,6 +56,10 @@ class MPC(object):
             uub = np.full((self.Nu), np.inf)
         if ulb is None:
             ulb = np.full((self.Nu), -np.inf)
+        if acc_uub is None:
+            acc_uub = np.full((self.Nu), np.inf)
+        if acc_ulb is None:
+            acc_ulb = np.full((self.Nu), -np.inf)
 
         # Starting state parameters - add slack here
         x0 = ca.MX.sym('x0', self.Nx)
@@ -114,6 +120,16 @@ class MPC(object):
                 con_ineq.append(x_t)
                 con_ineq_ub.append(np.full((self.Nx,), ca.inf))
                 con_ineq_lb.append(xlb)
+
+            if acc_uub is not None:
+                if t == 0:
+                    acc = (u_t - u0) / self.dt
+                else:
+                    acc = (u_t - opt_var['u', t - 1]) / self.dt
+
+                con_ineq.append(acc)
+                con_ineq_lb.append(acc_ulb)
+                con_ineq_ub.append(acc_uub)
 
             # Objective Function / Cost Function
             obj += self.running_cost(x_t, x_r, self.Q, u_t, self.R)
@@ -333,36 +349,17 @@ class MPC(object):
         :return: control input
         :rtype: ca.DM
         """
-        x_traj = self.model.get_joint_trajectory(t, self.Nt + 1)
-        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order='F')
+        x_traj = np.array(self.shared_state.trajectory_window)
+        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order='F') # TODO: THIS IS VERY POSSIBLY WRONG
         self.set_reference(x_sp)
-        _, u_pred = self.solve_mpc(x0)
 
-        # Calculate error to first state
+        _, u_pred = self.solve_mpc(x0, u0=self.u_prev)
+
+        u_cmd = np.array(u_pred[0])
+        self.u_prev = u_cmd.copy()
+
         error = self.calculate_error(x0, self.x_sp[0:6])
-
-        return u_pred[0], error
-
-    def ur10e_sim_controller(self, x0, xh):
-        """
-        Controller to be used in the ur10e simulator
-
-        :param x0: [description]
-        :type x0: [type]
-        :param xh: [description]
-        :type xh: [type]
-        :return: [description]
-        :rtype: [type]
-        """
-        x_traj = self.model.forward_propagate(xh, self.Nt + 1, radius=0.5)
-        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order='F')
-        self.set_reference(x_sp)
-        _, u_pred = self.solve_mpc(x0)
-
-        # Calculate error to first state
-        error = self.calculate_error(x0, x_traj[:, 0])
-
-        return u_pred[0], error
+        return u_cmd, error
 
     def calculate_error(self, x, xr):
         """

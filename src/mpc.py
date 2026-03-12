@@ -334,7 +334,7 @@ class MPC(object):
         optvar = self.opt_var(sol['x'])
 
         solve_time += time.time()
-        print('MPC - CPU time: %f seconds  |  Cost: %f  |  Horizon length: %d ' % (solve_time, sol['f'], self.Nt))
+        # print('MPC - CPU time: %f seconds  |  Cost: %f  |  Horizon length: %d ' % (solve_time, sol['f'], self.Nt))
         if status == "Infeasible_Problem_Detected":
             print("Infeasible_Problem_Detected")
             exit()

@@ -12,12 +12,83 @@ from collections import deque
 
 from src.imu import IMUGUI
 from src.trajectory_tracking import MPCSimulationThread
-from src.urx_control_thread import URXControlThread
+
+try:
+    from src.urx_control_thread import URXControlThread
+    HAS_URX = True
+except ImportError:
+    HAS_URX = False
 
 SAMPLING_RATE = 100 # Hz
-MPC_HORIZON = SAMPLING_RATE // 10 # sec = horizon_samples / sampling_rate
-VJ = 0.5 # RAD/SEC
-AJ = 1 # RAD/SEC^2
+MPC_HORIZON = SAMPLING_RATE // 20 # sec = horizon_samples / sampling_rate
+
+# ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
+# Hardware max from datasheet:
+#   Joints 0-1 (base, shoulder): 2.094 rad/s  (120 deg/s)
+#   Joints 2-5 (elbow, wrists):  3.142 rad/s  (180 deg/s)
+# Working limits (conservative for safety):
+VJ = 0.5   # rad/s  -- uniform working velocity limit for MPC
+AJ = 1.0   # rad/s² -- uniform working acceleration limit for MPC
+
+# Per-joint working velocity limits (rad/s).
+# UPDATE THESE when you know exact per-joint limits for your setup.
+JOINT_VEL_LIMITS = np.array([
+    VJ,   # joint 0 - base (shoulder pan)
+    VJ,   # joint 1 - shoulder (lift)
+    VJ,   # joint 2 - elbow
+    VJ,   # joint 3 - wrist 1
+    VJ,   # joint 4 - wrist 2
+    VJ,   # joint 5 - wrist 3
+])
+
+# Cartesian velocity limits for pre-IK interpolation [x,y,z,roll,pitch,yaw].
+# Position channels (m/s) match robot Cartesian speed.
+# Orientation channels (rad/s) are generous -- real enforcement happens
+# in joint space after IK using JOINT_VEL_LIMITS above.
+CART_VEL_LIMITS = np.array([
+    0.5,   # x  (m/s)
+    0.5,   # y  (m/s)
+    0.5,   # z  (m/s)
+    5.0,   # roll  (rad/s)
+    5.0,   # pitch (rad/s)
+    5.0,   # yaw   (rad/s)
+])
+
+
+def interpolate_joint_segment(theta_prev, theta_next, dt, v_max):
+    """Subdivide a joint-space segment so every joint respects its velocity limit.
+
+    Parameters
+    ----------
+    theta_prev : (6,) current joint angles
+    theta_next : (6,) target joint angles
+    dt         : float, timestep between the two points
+    v_max      : (6,) per-joint velocity limits (rad/s)
+
+    Returns
+    -------
+    list of (6,) arrays -- intermediate waypoints (excluding theta_prev,
+    including theta_next).  If the segment is already feasible the list
+    contains only theta_next.
+    """
+    delta = theta_next - theta_prev
+    if dt <= 0:
+        return [theta_next]
+
+    v_required = np.abs(delta) / dt
+    ratios = v_required / v_max
+    r = np.max(ratios)
+
+    N = max(1, int(np.ceil(r)))
+
+    if N == 1:
+        return [theta_next]
+
+    points = []
+    for i in range(1, N + 1):
+        points.append(theta_prev + (i / N) * delta)
+    return points
+
 
 class SharedTrajectoryState:
     """Thread-safe shared state for IMU and MPC communication."""
@@ -25,29 +96,57 @@ class SharedTrajectoryState:
     def __init__(self):
         self.lock = threading.Lock()
 
-        # Trajectory data
         self.following_trajectory = False
         self.trajectory_window = deque(maxlen=MPC_HORIZON+1)
 
-        # Robot data
         self.u_curr = np.zeros((6,1))
         self.robot_enabled = False
         self.shutdown = False
         self.joint_pos = None
 
+        self._last_joint_target = None
+
+    def append_joint_target(self, theta_next, dt):
+        """Append a joint-space target with automatic interpolation.
+
+        If the step from the previous target to theta_next would violate
+        any joint velocity limit, intermediate waypoints are inserted so
+        the robot follows the same path at a feasible speed.
+        """
+        with self.lock:
+            if self._last_joint_target is None:
+                self._last_joint_target = theta_next.copy()
+                self.trajectory_window.append(theta_next)
+                return
+
+            points = interpolate_joint_segment(
+                self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS)
+
+            if len(points) > 1:
+                delta = theta_next - self._last_joint_target
+                v_req = np.abs(delta) / dt
+                worst = np.argmax(v_req / JOINT_VEL_LIMITS)
+                print(f"[INTERP] Joint {worst} needs "
+                      f"{v_req[worst]:.2f} rad/s (limit {JOINT_VEL_LIMITS[worst]:.2f}), "
+                      f"N={len(points)}")
+
+            for pt in points:
+                self.trajectory_window.append(pt)
+
+            self._last_joint_target = theta_next.copy()
+
     def start_following(self):
-        """Start trajectory following (called by MPC)."""
         with self.lock:
             self.trajectory_window = deque(maxlen=MPC_HORIZON+1)
             self.following_trajectory = True
             self.robot_enabled = True
 
     def stop_following(self):
-        """Stop trajectory following (called by MPC)."""
         with self.lock:
             self.following_trajectory = False
             self.robot_enabled = False
             self.u_curr = np.zeros((6,1))
+            self._last_joint_target = None
 
 
 def run_imu_gui(shared_state):
@@ -156,26 +255,29 @@ def main():
     mpc_thread = threading.Thread(target=run_mpc_background, args=(shared_state, MPC_HORIZON), daemon=True)
     mpc_thread.start()
 
-    urx_thread = URXControlThread(
-        shared_state=shared_state,
-        robot_ip="192.168.1.10",
-        hz=100,
-        vj=VJ,
-        aj=AJ
-    )
-    urx_thread.start()
+    urx_thread = None
+    if HAS_URX:
+        urx_thread = URXControlThread(
+            shared_state=shared_state,
+            robot_ip="192.168.1.10",
+            hz=100,
+            vj=VJ,
+            aj=AJ
+        )
+        urx_thread.start()
+    else:
+        print("[WARN] urx not installed -- running without robot arm")
 
-    # Run IMU GUI in main thread (this blocks until GUI closes)
     print("Starting combined IMU + MPC application...")
     print("MPC simulation is waiting for 'Start Following' button to be pressed in the GUI.")
     run_imu_gui(shared_state)
 
-    # After GUI is killed
     with shared_state.lock:
         shared_state.shutdown = True
 
-    urx_thread.stop()
-    urx_thread.join(timeout=2)
+    if urx_thread is not None:
+        urx_thread.stop()
+        urx_thread.join(timeout=2)
 
 
 if __name__ == "__main__":

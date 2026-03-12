@@ -10,6 +10,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from pymavlink import mavutil
+from src.ur10e import UR10e
+import src.utils as ur_utils
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -1403,8 +1405,30 @@ class IMUGUI:
         # tracking math will break.
         return data.copy()
 
+    def _pose_to_joint_angles(self, position, orientation):
+        """Convert IMU world-frame pose to UR10e joint angles.
+
+        Applies the workspace offset (same as ur10e.py line 215) to shift
+        the IMU-relative position into the robot's reachable space, then
+        calls the analytical IK.  Returns None if the pose is unreachable.
+        """
+        pose6 = np.concatenate([position, orientation])
+        T = self._workspace_offset @ ur_utils.pose6_to_T(pose6)
+        try:
+            joints = self._ik_robot.IK("elbow_down", T)
+            if np.any(np.isnan(joints)):
+                return None
+            return joints
+        except Exception:
+            return None
+
     def stream_trajectory_to_window(self):
         self.set_status("Starting trajectory stream to MPC window...")
+        print("[STREAM] Trajectory streaming started")
+
+        self._ik_robot = UR10e(dt=1.0 / self.sampling_rate)
+        self._workspace_offset = ur_utils.pose6_to_T([0.5, 0.5, 0.5, 0, 0, 0])
+        self._last_valid_joints = None
 
         prev_t = None
         position = np.zeros(3)
@@ -1412,6 +1436,7 @@ class IMUGUI:
         orientation = np.zeros(3)
         gyro_bias_online = np.zeros(3)
         accel_lp = np.zeros(3)
+        stream_count = 0
 
         q = None
         R_enu_0_T = None
@@ -1453,10 +1478,13 @@ class IMUGUI:
 
                     R_enu_0_T = self.quat_to_rotation_matrix(q).T
 
-                    trajectory_point = np.concatenate([position, orientation])
-                    with self.shared_state.lock:
-                        if self.shared_state.following_trajectory:
-                            self.shared_state.trajectory_window.append(trajectory_point)
+                    joints = self._pose_to_joint_angles(position, orientation)
+                    if joints is None:
+                        joints = self._ik_robot.get_initial_pose()
+                    self._last_valid_joints = joints.copy()
+                    self.shared_state.append_joint_target(joints, 1.0)
+                    stream_count += 1
+                    print(f"[STREAM] Initial joints (deg): {np.degrees(joints).round(1)}")
                     continue
 
                 dt = t - prev_t
@@ -1521,15 +1549,26 @@ class IMUGUI:
 
                 position = position + velocity * dt
 
-                trajectory_point = np.concatenate([position.copy(), orientation.copy()])
+                joints = self._pose_to_joint_angles(position, orientation)
+                if joints is not None:
+                    self._last_valid_joints = joints.copy()
+                else:
+                    joints = self._last_valid_joints.copy()
 
-                with self.shared_state.lock:
-                    if self.shared_state.following_trajectory:
-                        self.shared_state.trajectory_window.append(trajectory_point)
+                self.shared_state.append_joint_target(joints, dt)
+                stream_count += 1
+
+                if stream_count % 100 == 0:
+                    wlen = len(self.shared_state.trajectory_window)
+                    print(f"[STREAM] {stream_count} pts, window={wlen}, "
+                          f"pos=[{position[0]:.3f},{position[1]:.3f},{position[2]:.3f}], "
+                          f"q(deg)={np.degrees(joints).round(1)}")
 
         except Exception as e:
             self.set_status(f"Stream error: {e}")
+            print(f"[STREAM] Error: {e}")
         finally:
+            print(f"[STREAM] Stopped after {stream_count} points")
             self._stream_thread_running = False
             self._stream_thread = None
 

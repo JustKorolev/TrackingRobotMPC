@@ -22,6 +22,8 @@ class URXControlThread(threading.Thread):
             print(f"[URX] Connecting to robot at {self.robot_ip}...")
             self.robot = urx.Robot(self.robot_ip)
 
+            self.shared_state.joint_pos = self.robot.getj()
+
             with self.shared_state.lock:
                 self.shared_state.robot_connected = True
 

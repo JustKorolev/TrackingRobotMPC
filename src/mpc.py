@@ -334,34 +334,13 @@ class MPC(object):
         :return: control input
         :rtype: ca.DM
         """
-        x_traj = np.array(self.shared_state.trajectory_window).T
+        x_traj = np.array(self.shared_state.trajectory_window)
         x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order='F')
         self.set_reference(x_sp)
         _, u_pred = self.solve_mpc(x0)
 
         # Calculate error to first state
         error = self.calculate_error(x0, self.x_sp[0:6])
-
-        return u_pred[0], error
-
-    def ur10e_sim_controller(self, x0, xh):
-        """
-        Controller to be used in the ur10e simulator
-
-        :param x0: [description]
-        :type x0: [type]
-        :param xh: [description]
-        :type xh: [type]
-        :return: [description]
-        :rtype: [type]
-        """
-        x_traj = self.model.forward_propagate(xh, self.Nt + 1, radius=0.5)
-        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order='F')
-        self.set_reference(x_sp)
-        _, u_pred = self.solve_mpc(x0)
-
-        # Calculate error to first state
-        error = self.calculate_error(x0, x_traj[:, 0])
 
         return u_pred[0], error
 

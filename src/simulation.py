@@ -39,25 +39,32 @@ class EmbeddedSimEnvironment(object):
         u_vec = np.empty((6, 0))
         e_vec = np.empty((6, 0))
 
+        start_wall = time.time()
+        next_tick = start_wall
+
         self.ran_iterations = 0
         while self.shared_state.following_trajectory:
+            loop_start = time.time()
 
-            # Get control input and obtain next state
-            x = x_vec[:, -1].reshape(self.model.n, 1)
+            x = x_vec[:, -1].reshape(self.model.n, 1) # TODO: REMOVE THIS FOR ACTUAL ROBOT
+            # x = np.array(self.shared_state.joint_pos).reshape(self.model.n, 1) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
             u, error = self.controller(x, self.ran_iterations * self.dt)
             x_next = self.dynamics(x, u)
 
-            # Set joint velocity input
             with self.shared_state.lock:
-                self.u_curr = u
+                self.shared_state.u_curr = np.array(u).reshape(6, 1)
 
-            # Store data
             t = np.append(t, t[-1] + self.dt)
             x_vec = np.append(x_vec, np.array(x_next).reshape(self.model.n, 1), axis=1)
             u_vec = np.append(u_vec, np.array(u).reshape(self.model.m, 1), axis=1)
             e_vec = np.append(e_vec, error.reshape(6, 1), axis=1)
 
             self.ran_iterations += 1
+
+            next_tick += self.dt
+            sleep_time = next_tick - time.time()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         _, error = self.controller(x_next, self.ran_iterations * self.dt)
         e_vec = np.append(e_vec, error.reshape((6, 1)), axis=1)

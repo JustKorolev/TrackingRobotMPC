@@ -14,8 +14,8 @@ from src.imu import IMUGUI
 from src.trajectory_tracking import MPCSimulationThread
 from src.urx_control_thread import URXControlThread
 
-SAMPLING_RATE = 150 # Hz
-MPC_HORIZON = SAMPLING_RATE // 30 # sec = horizon_samples / sampling_rate
+SAMPLING_RATE = 100 # Hz
+MPC_HORIZON = SAMPLING_RATE // 20 # sec = horizon_samples / sampling_rate
 
 class SharedTrajectoryState:
     """Thread-safe shared state for IMU and MPC communication."""
@@ -32,6 +32,7 @@ class SharedTrajectoryState:
         self.u_curr = np.zeros((6,1))
         self.robot_enabled = False
         self.shutdown = False
+        self.joint_pos = None
 
     def start_following(self):
         """Start trajectory following (called by MPC)."""
@@ -96,7 +97,7 @@ def run_mpc_background(shared_state, mpc_horizon, status_callback=None):
                     if status_callback and msg != last_status:
                         status_callback(msg)
                         last_status = msg
-                    time.sleep(0.01)
+                    time.sleep(0.05)
 
                 else:
                     if sim_thread.status == "completed":

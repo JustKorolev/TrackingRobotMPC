@@ -94,6 +94,7 @@ class IMUGUI:
         self.raw_gz = deque(maxlen=self.MAX_RAW_SAMPLES)
 
         self._stream_thread_running = False
+        self._stream_thread = None
 
         self.build_gui()
         self.worker = threading.Thread(target=self.worker_loop, daemon=True)
@@ -1343,29 +1344,27 @@ class IMUGUI:
         return data.copy()
 
     def stream_trajectory_to_window(self):
-        """
-        Continuously stream IMU trajectory data to shared_state.trajectory_window
-        while shared_state.following_trajectory is True.
-        Similar to record_trajectory but appends to a rolling window instead of
-        accumulating data for a fixed duration.
-        """
         self.set_status("Starting trajectory stream to MPC window...")
 
-        raw_samples = []
-        ekf_rotations = []
-        first_sample_time = None
-        self._attitude_count = 0
+        prev_t = None
+        position = np.zeros(3)
+        velocity = np.zeros(3)
+        orientation = np.zeros(3)
+        gyro_bias_online = np.zeros(3)
+        accel_lp = np.zeros(3)
+
+        q = None
+        R_enu_0_T = None
+        gravity_enu = np.array([0.0, 0.0, self.G])
 
         try:
             while self.running:
-                # Check if we should continue streaming
                 with self.shared_state.lock:
                     following = self.shared_state.following_trajectory
 
                 if not following:
-                    self.set_status("Trajectory streaming paused (following_trajectory=False)")
-                    time.sleep(0.1)
-                    continue
+                    self.set_status("Trajectory streaming stopped")
+                    break
 
                 sample = self.read_one_sample()
                 if sample is None:
@@ -1375,117 +1374,104 @@ class IMUGUI:
                 t_us, ax, ay, az, gx, gy, gz = sample
                 t = t_us / 1e6
 
-                if first_sample_time is None:
-                    first_sample_time = t
+                accel = np.array([ax, ay, az]) - self.accel_bias
+                gyro = np.array([gx, gy, gz]) - self.gyro_bias
 
-                elapsed = t - first_sample_time
-                raw_samples.append([elapsed, ax, ay, az, gx, gy, gz])
-                ekf_rotations.append(self._pixhawk_R_enu.copy())
+                if prev_t is None:
+                    prev_t = t
 
-                # Process accumulated samples to generate trajectory points
-                if len(raw_samples) >= 1:
-                    raw_data = np.array(raw_samples)
-                    times = raw_data[:, 0]
-                    accels = raw_data[:, 1:4] - self.accel_bias
-                    gyros = raw_data[:, 4:7] - self.gyro_bias
-
-                    n = len(times)
-                    positions = np.zeros((n, 3))
-                    orientations = np.zeros((n, 3))
-                    velocities = np.zeros((n, 3))
-
-                    use_ekf = (ekf_rotations is not None and len(ekf_rotations) == n
-                                and self._has_pixhawk_attitude)
-
-                    gravity_enu = np.array([0.0, 0.0, self.G])
-
-                    # Initialize quaternion
-                    if use_ekf:
-                        q = self.rotation_matrix_to_quat(ekf_rotations[0])
+                    if self._has_pixhawk_attitude:
+                        q = self.rotation_matrix_to_quat(self._pixhawk_R_enu.copy())
                     else:
-                        a0 = accels[0]
-                        a0n = np.linalg.norm(a0)
+                        a0n = np.linalg.norm(accel)
                         if a0n > 1e-6:
-                            roll0 = np.arctan2(a0[1], a0[2])
-                            pitch0 = np.arctan2(-a0[0], np.sqrt(a0[1]**2 + a0[2]**2))
+                            roll0 = np.arctan2(accel[1], accel[2])
+                            pitch0 = np.arctan2(-accel[0], np.sqrt(accel[1]**2 + accel[2]**2))
                         else:
                             roll0, pitch0 = 0.0, 0.0
                         q = self.euler_to_quat(roll0, pitch0, 0.0)
 
-                    R_enu_0 = self.quat_to_rotation_matrix(q)
-                    R_enu_0_T = R_enu_0.T
-                    orientations[0] = self.quat_to_euler(
-                        self.rotation_matrix_to_quat(np.eye(3)))
+                    R_enu_0_T = self.quat_to_rotation_matrix(q).T
 
-                    gyro_bias_online = np.zeros(3)
-                    accel_lp = np.zeros(3)
+                    trajectory_point = np.concatenate([position, orientation])
+                    with self.shared_state.lock:
+                        if self.shared_state.following_trajectory:
+                            self.shared_state.trajectory_window.append(trajectory_point)
+                    continue
 
-                    for i in range(1, n):
-                        dt = times[i] - times[i - 1]
-                        if dt <= 0 or dt > 0.5:
-                            positions[i] = positions[i - 1]
-                            orientations[i] = orientations[i - 1]
-                            velocities[i] = velocities[i - 1]
-                            continue
+                dt = t - prev_t
+                prev_t = t
 
-                        is_still = self.is_stationary_sample(accels[i], gyros[i])
+                if dt <= 0 or dt > 0.5:
+                    continue
 
-                        if is_still:
-                            ba = self.GYRO_BIAS_ALPHA
-                            gyro_bias_online = (1 - ba) * gyro_bias_online + ba * gyros[i]
+                is_still = self.is_stationary_sample(accel, gyro)
 
-                        omega = gyros[i] - gyro_bias_online
+                if is_still:
+                    ba = self.GYRO_BIAS_ALPHA
+                    gyro_bias_online = (1 - ba) * gyro_bias_online + ba * gyro
 
-                        omega_q = np.array([0.0, omega[0], omega[1], omega[2]])
-                        q_dot = 0.5 * self.quat_multiply(q, omega_q)
-                        q = q + q_dot * dt
+                omega = gyro - gyro_bias_online
+                omega_q = np.array([0.0, omega[0], omega[1], omega[2]])
+                q_dot = 0.5 * self.quat_multiply(q, omega_q)
+                q = q + q_dot * dt
+                q = q / np.linalg.norm(q)
+
+                if self._has_pixhawk_attitude:
+                    q = self.rotation_matrix_to_quat(self._pixhawk_R_enu.copy())
+
+                if is_still:
+                    accel_norm = np.linalg.norm(accel)
+                    if accel_norm > 1e-6:
+                        R_cur = self.quat_to_rotation_matrix(q)
+                        g_meas = accel / accel_norm
+                        g_expected = R_cur.T @ np.array([0.0, 0.0, 1.0])
+                        correction = np.cross(g_meas, g_expected) * self.ACCEL_CORRECTION_GAIN
+                        cq = np.array([0.0, correction[0], correction[1], correction[2]])
+                        q_dot_c = 0.5 * self.quat_multiply(q, cq)
+                        q = q + q_dot_c * dt
                         q = q / np.linalg.norm(q)
 
-                        if use_ekf and not np.array_equal(ekf_rotations[i], ekf_rotations[i - 1]):
-                            q = self.rotation_matrix_to_quat(ekf_rotations[i])
+                R_enu_t = self.quat_to_rotation_matrix(q)
+                R_nb = R_enu_0_T @ R_enu_t
 
-                        R_enu_t = self.quat_to_rotation_matrix(q)
-                        R_nb = R_enu_0_T @ R_enu_t
+                gravity_body = R_enu_t.T @ gravity_enu
+                a_lin_nav = R_nb @ (accel - gravity_body)
 
-                        gravity_body = R_enu_t.T @ gravity_enu
-                        a_lin_nav = R_nb @ (accels[i] - gravity_body)
+                orientation[0] = np.arctan2(R_nb[2, 1], R_nb[2, 2])
+                sinp = np.clip(-R_nb[2, 0], -1.0, 1.0)
+                orientation[1] = np.arcsin(sinp)
+                orientation[2] = np.arctan2(R_nb[1, 0], R_nb[0, 0])
 
-                        orientations[i, 0] = np.arctan2(R_nb[2, 1], R_nb[2, 2])
-                        sinp = np.clip(-R_nb[2, 0], -1.0, 1.0)
-                        orientations[i, 1] = np.arcsin(sinp)
-                        orientations[i, 2] = np.arctan2(R_nb[1, 0], R_nb[0, 0])
+                alpha = self.ACCEL_LP_ALPHA
+                accel_lp = alpha * a_lin_nav + (1.0 - alpha) * accel_lp
 
-                        alpha = self.ACCEL_LP_ALPHA
-                        accel_lp = alpha * a_lin_nav + (1.0 - alpha) * accel_lp
+                accel_use = accel_lp.copy()
+                accel_use[np.abs(accel_use) < self.ACCEL_DEADBAND] = 0.0
 
-                        accel_use = accel_lp.copy()
-                        accel_use[np.abs(accel_use) < self.ACCEL_DEADBAND] = 0.0
+                if is_still:
+                    velocity[:] = 0.0
+                else:
+                    velocity = velocity + accel_use * dt
+                    vel_mag = np.linalg.norm(velocity)
+                    if vel_mag < self.VEL_DEADBAND:
+                        velocity[:] = 0.0
+                    elif vel_mag > self.MAX_VELOCITY:
+                        velocity *= self.MAX_VELOCITY / vel_mag
 
-                        if is_still:
-                            velocities[i] = velocities[i - 1]
-                        else:
-                            velocities[i] = velocities[i - 1] + accel_use * dt
+                position = position + velocity * dt
 
-                        positions[i] = (positions[i - 1]
-                                        + 0.5 * (velocities[i] + velocities[i - 1]) * dt)
+                trajectory_point = np.concatenate([position.copy(), orientation.copy()])
 
-                    # Append the latest trajectory point to the shared window
-                    if n > 0:
-                        latest_pos = positions[-1]
-                        latest_ori = orientations[-1]
-
-                        trajectory_point = np.concatenate([latest_pos, latest_ori])
-
-                        with self.shared_state.lock:
-                            self.shared_state.trajectory_window.append(trajectory_point)
-
-                    # Keep only recent samples to avoid memory buildup
-                    if len(raw_samples) > self.sampling_rate * self.mpc_horizon:
-                        raw_samples = raw_samples[-self.sampling_rate:]
-                        ekf_rotations = ekf_rotations[-self.sampling_rate:]
+                with self.shared_state.lock:
+                    if self.shared_state.following_trajectory:
+                        self.shared_state.trajectory_window.append(trajectory_point)
 
         except Exception as e:
-            pass
+            self.set_status(f"Stream error: {e}")
+        finally:
+            self._stream_thread_running = False
+            self._stream_thread = None
 
     def worker_loop(self):
         while self.running:
@@ -1509,12 +1495,17 @@ class IMUGUI:
                     do_stop = True
 
             # Check if we should start trajectory streaming
-            if self.shared_state.following_trajectory and not self._stream_thread_running:
-                self._stream_thread_running = True
-                stream_thread = threading.Thread(target=self.stream_trajectory_to_window, daemon=True)
-                stream_thread.start()
-            elif not self.shared_state.following_trajectory:
-                self._stream_thread_running = False
+            with self.shared_state.lock:
+                following = self.shared_state.following_trajectory
+
+            if following:
+                if self._stream_thread is None or not self._stream_thread.is_alive():
+                    self._stream_thread_running = True
+                    self._stream_thread = threading.Thread(
+                        target=self.stream_trajectory_to_window,
+                        daemon=True
+                    )
+                    self._stream_thread.start()
 
             try:
                 if do_calib:
@@ -1668,6 +1659,11 @@ class IMUGUI:
 
     def on_close(self):
         self.running = False
+        with self.shared_state.lock:
+            self.shared_state.shutdown = True
+            self.shared_state.robot_enabled = False
+            self.shared_state.u_curr = np.zeros((6, 1))
+            
         try:
             if self.mav is not None:
                 self.mav.close()

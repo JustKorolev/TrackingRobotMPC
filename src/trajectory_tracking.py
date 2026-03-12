@@ -40,7 +40,7 @@ class MPCSimulationThread(threading.Thread):
 
             sim_env_tracking = EmbeddedSimEnvironment(model=ur10e,
                                                       dynamics=ur10e.model,
-                                                      controller=tracking_ctl,
+                                                      controller=tracking_ctl.mpc_controller,
                                                       shared_state=self.shared_state)
 
             x0 = ur10e.get_initial_pose()
@@ -49,6 +49,8 @@ class MPCSimulationThread(threading.Thread):
 
             self.results = {'t': t, 'y': y, 'u': u, 'env': sim_env_tracking}
             self.status = "completed"
+            sim_env_tracking.visualize()
+            sim_env_tracking.visualize_error()
             print("[MPC Thread] Simulation completed successfully!")
 
         except Exception as e:

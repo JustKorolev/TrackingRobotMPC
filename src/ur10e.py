@@ -232,7 +232,7 @@ class UR10e():
         :return: starting state
         :rtype: np.ndarray
         """
-        x0 = np.array([-2.58636783, 1.64280682, 2.07696395, -2.64554437, 1.64949147, 2.25229027])
+        x0 = np.array([-2.58636783, 1.64280682, 2.07696395, -2.64554437, 1.64949147, 2.25229027]) # TODO: SET THIS TO WHATEVER WE DECIDE OUR CONSTANT INITIAL POSE TO BE
         return x0
 
 if __name__ == "__main__":

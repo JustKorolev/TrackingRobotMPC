@@ -64,9 +64,9 @@ class MPC(object):
         # Starting state parameters - add slack here
         x0 = ca.MX.sym('x0', self.Nx)
         x_ref = ca.MX.sym('x_ref', self.Nx*(self.Nt+1),)
-        # u_ref = ca.MX.sym('u_ref', self.Nu*self.Nt,)
+        u_ref = ca.MX.sym('u_ref', self.Nu*self.Nt,)
         u0 = ca.MX.sym('u0', self.Nu)
-        param_s = ca.vertcat(x0, x_ref, u0)
+        param_s = ca.vertcat(x0, x_ref, u0, u_ref)
 
         # Create optimization variables
         opt_var = ctools.struct_symMX([(ctools.entry('u', shape=(self.Nu,), repeat=self.Nt),
@@ -94,7 +94,7 @@ class MPC(object):
             # Get variables
             x_t = opt_var['x', t]
             x_r = x_ref[self.Nx*t:(self.Nx)*(t+1)]
-            # u_r = u_ref[self.Nu*t:(self.Nu)*(t+1)]
+            u_r = u_ref[self.Nu*t:(self.Nu)*(t+1)]
             u_t = opt_var['u', t]
 
             # Dynamics constraint
@@ -132,7 +132,7 @@ class MPC(object):
                 con_ineq_ub.append(acc_uub)
 
             # Objective Function / Cost Function
-            obj += self.running_cost(x_t, x_r, self.Q, u_t, self.R)
+            obj += self.running_cost(x_t, x_r, self.Q, u_t, u_r, self.R)
 
         # Terminal Cost
         obj += self.terminal_cost(opt_var['x', self.Nt], x_r_terminal, self.P)
@@ -196,18 +196,18 @@ class MPC(object):
             options.update(solver_opts)
         self.solver = ca.nlpsol('mpc_solver', 'ipopt', nlp, options)
 
-        # # u_ref_solver initialization
-        # u_ref_i = ca.MX.sym('u_ref_i', self.Nu)
-        # x_ref_i = ca.MX.sym('x_ref_i', self.Nx)
-        # x_ref_i_next = ca.MX.sym('x_ref_i_next', self.Nx)
-        # err = self.dynamics(x_ref_i, u_ref_i) - x_ref_i_next
-        # J = ca.dot(err, err)
+        # u_ref_solver initialization
+        u_ref_i = ca.MX.sym('u_ref_i', self.Nu)
+        x_ref_i = ca.MX.sym('x_ref_i', self.Nx)
+        x_ref_i_next = ca.MX.sym('x_ref_i_next', self.Nx)
+        err = self.dynamics(x_ref_i, u_ref_i) - x_ref_i_next
+        J = ca.dot(err, err)
 
-        # nlp = {'x': u_ref_i, 'f': J, 'p': ca.vertcat(x_ref_i, x_ref_i_next)}
-        # self.u_ref_solver = ca.nlpsol('u_ref_solver', 'ipopt', nlp, {
-        #     'ipopt.print_level': 0,
-        #     'print_time': False
-        # })
+        nlp = {'x': u_ref_i, 'f': J, 'p': ca.vertcat(x_ref_i, x_ref_i_next)}
+        self.u_ref_solver = ca.nlpsol('u_ref_solver', 'ipopt', nlp, {
+            'ipopt.print_level': 0,
+            'print_time': False
+        })
 
         build_solver_time += time.time()
         print('\n________________________________________')
@@ -265,27 +265,27 @@ class MPC(object):
         x = ca.MX.sym('x', self.Nx)
         xr = ca.MX.sym('xr', self.Nx)
         u = ca.MX.sym('u', self.Nu)
-        # ur = ca.MX.sym('ur',self.Nu)
+        ur = ca.MX.sym('ur',self.Nu)
 
         # Prepare variables
         q = x[0:6]
         qdot = u[0:6]
 
         qr = xr[0:6]
-        # qdotr = ur[0:6]
+        qdotr = ur[0:6]
 
         # Calculate errors
         eq = wrap_joints_cas(q - qr)
-        # eqdot = qdot - qdotr
+        eqdot = qdot - qdotr
 
         xe_vec = ca.vertcat(eq)
-        # ue_vec = ca.vertcat(eqdot)
+        ue_vec = ca.vertcat(eqdot)
 
         # Calculate running cost
         ln = ca.mtimes(ca.mtimes(xe_vec.T, Q), xe_vec) \
-            + ca.mtimes(ca.mtimes(u.T, R), u)
+            + ca.mtimes(ca.mtimes(ue_vec.T, R), ue_vec)
 
-        self.running_cost = ca.Function('ln', [x, xr, Q, u, R], [ln])
+        self.running_cost = ca.Function('ln', [x, xr, Q, u, ur, R], [ln])
 
         # Calculate terminal cost
         V = ca.mtimes(ca.mtimes(xe_vec.T, P), xe_vec)
@@ -309,6 +309,8 @@ class MPC(object):
         if self.x_sp is None:
             self.x_sp = np.zeros(self.Nx * (self.Nt + 1))
 
+        print(self.x_sp)
+
         # Initialize variables
         self.optvar_x0 = np.full((1, self.Nx), x0.T)
 
@@ -318,7 +320,7 @@ class MPC(object):
 
         solve_time = -time.time()
 
-        param = ca.vertcat(x0, self.x_sp, u0)
+        param = ca.vertcat(x0, self.x_sp, u0, self.u_sp)
         args = dict(x0=self.optvar_init,
                     lbx=self.optvar_lb,
                     ubx=self.optvar_ub,
@@ -379,7 +381,6 @@ class MPC(object):
 
         # Prepare xr
         xr = xr.reshape((xr.shape[0], 1))
-        # ur = ur.reshape((ur.shape[0], 1))
 
         # Prepare variables
         q = x[0:6]
@@ -399,18 +400,13 @@ class MPC(object):
         """
         self.x_sp = x_sp
 
-        # if self.trajectory_tracking:
-        #     u_sp = np.zeros(self.Nu*self.Nt)
-        #     for i in range(self.Nt):
-        #         param = ca.vertcat(x_sp[self.Nx*i:self.Nx*(i+1)],
-        #                         x_sp[self.Nx*(i+1):self.Nx*(i+2)])
-        #         sol = self.u_ref_solver(x0=np.zeros(self.Nu), p=param)
-        #         u_ref_i = np.array(sol['x']).reshape(-1, 1)
-        #         u_sp[self.Nu*i:self.Nu*(i+1)] = u_ref_i.flatten()
-        # else:
-        #     param = ca.vertcat(x_sp, x_sp)
-        #     sol = self.u_ref_solver(x0=np.zeros(self.Nu), p=param)
-        #     u_ref_i = np.array(sol['x']).reshape(-1, 1)
-        #     u_sp = u_ref_i.flatten()
+        u_sp = np.zeros(self.Nu*self.Nt)
+        for i in range(self.Nt):
+            param = ca.vertcat(x_sp[self.Nx*i:self.Nx*(i+1)],
+                            x_sp[self.Nx*(i+1):self.Nx*(i+2)])
+            sol = self.u_ref_solver(x0=np.zeros(self.Nu), p=param)
+            u_ref_i = np.array(sol['x']).reshape(-1, 1)
+            u_sp[self.Nu*i:self.Nu*(i+1)] = u_ref_i.flatten()
 
-        # self.u_sp = u_sp
+        u_sp = np.zeros(self.Nu*self.Nt)
+        self.u_sp = u_sp

@@ -15,7 +15,7 @@ from src.trajectory_tracking import MPCSimulationThread
 from src.urx_control_thread import URXControlThread
 
 SAMPLING_RATE = 100 # Hz
-MPC_HORIZON = SAMPLING_RATE // 20 # sec = horizon_samples / sampling_rate
+MPC_HORIZON = SAMPLING_RATE // 10 # sec = horizon_samples / sampling_rate
 VJ = 0.5 # RAD/SEC
 AJ = 1 # RAD/SEC^2
 
@@ -28,7 +28,6 @@ class SharedTrajectoryState:
         # Trajectory data
         self.following_trajectory = False
         self.trajectory_window = deque(maxlen=MPC_HORIZON+1)
-        self.trajectory_window = np.ones((MPC_HORIZON+1, 6)) # TODO: REMOVE!!
 
         # Robot data
         self.u_curr = np.zeros((6,1))
@@ -39,6 +38,7 @@ class SharedTrajectoryState:
     def start_following(self):
         """Start trajectory following (called by MPC)."""
         with self.lock:
+            self.trajectory_window = deque(maxlen=MPC_HORIZON+1)
             self.following_trajectory = True
             self.robot_enabled = True
 
@@ -48,7 +48,6 @@ class SharedTrajectoryState:
             self.following_trajectory = False
             self.robot_enabled = False
             self.u_curr = np.zeros((6,1))
-            # self.trajectory_window = deque(maxlen=MPC_HORIZON*SAMPLING_RATE) #TODO:: UNCOMMENT THIS
 
 
 def run_imu_gui(shared_state):

@@ -1723,7 +1723,7 @@ class IMUGUI:
             self.shared_state.shutdown = True
             self.shared_state.robot_enabled = False
             self.shared_state.u_curr = np.zeros((6, 1))
-            
+
         try:
             if self.mav is not None:
                 self.mav.close()

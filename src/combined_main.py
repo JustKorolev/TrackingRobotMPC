@@ -94,21 +94,53 @@ def interpolate_joint_segment(theta_prev, theta_next, dt, v_max):
     return points
 
 
+MAX_QUEUE_LEN = 500
+
+
 class SharedTrajectoryState:
-    """Thread-safe shared state for IMU and MPC communication."""
+    """Thread-safe shared state for IMU and MPC communication.
+
+    trajectory_queue is a FIFO: IMU appends to the right, MPC reads from
+    the left and pops after executing each step.
+    """
 
     def __init__(self):
         self.lock = threading.Lock()
 
         self.following_trajectory = False
-        self.trajectory_window = deque(maxlen=MPC_HORIZON+1)
+        self.trajectory_queue = deque()
 
-        self.u_curr = np.zeros((6,1))
+        self.u_curr = np.zeros((6, 1))
         self.robot_enabled = False
         self.shutdown = False
         self.joint_pos = None
 
         self._last_joint_target = None
+
+    @property
+    def trajectory_window(self):
+        """MPC-facing view: return the next MPC_HORIZON+1 points as a list.
+
+        If the queue has fewer points than needed, pad by repeating the
+        last available point so the MPC always gets a full horizon.
+        """
+        with self.lock:
+            buf = list(self.trajectory_queue)
+
+        n_need = MPC_HORIZON + 1
+        if len(buf) == 0:
+            return np.zeros((n_need, 6))
+        if len(buf) >= n_need:
+            return np.array(buf[:n_need])
+
+        pad = [buf[-1]] * (n_need - len(buf))
+        return np.array(buf + pad)
+
+    def consume_one(self):
+        """Pop the first point after the MPC has executed it."""
+        with self.lock:
+            if len(self.trajectory_queue) > 1:
+                self.trajectory_queue.popleft()
 
     def append_joint_target(self, theta_next, dt):
         """Append a joint-space target with automatic interpolation.
@@ -116,11 +148,15 @@ class SharedTrajectoryState:
         If the step from the previous target to theta_next would violate
         any joint velocity limit, intermediate waypoints are inserted so
         the robot follows the same path at a feasible speed.
+
+        If the queue grows beyond MAX_QUEUE_LEN the oldest points are
+        dropped so the robot jumps ahead to where the user is now
+        instead of accumulating unbounded lag.
         """
         with self.lock:
             if self._last_joint_target is None:
                 self._last_joint_target = theta_next.copy()
-                self.trajectory_window.append(theta_next)
+                self.trajectory_queue.append(theta_next)
                 return
 
             points = interpolate_joint_segment(
@@ -135,21 +171,26 @@ class SharedTrajectoryState:
                       f"N={len(points)}")
 
             for pt in points:
-                self.trajectory_window.append(pt)
+                self.trajectory_queue.append(pt)
+
+            # Prevent unbounded lag: trim oldest points if queue is too long
+            while len(self.trajectory_queue) > MAX_QUEUE_LEN:
+                self.trajectory_queue.popleft()
 
             self._last_joint_target = theta_next.copy()
 
     def start_following(self):
         with self.lock:
-            self.trajectory_window = deque(maxlen=MPC_HORIZON+1)
+            self.trajectory_queue = deque()
             self.following_trajectory = True
             self.robot_enabled = True
+            self._last_joint_target = None
 
     def stop_following(self):
         with self.lock:
             self.following_trajectory = False
             self.robot_enabled = False
-            self.u_curr = np.zeros((6,1))
+            self.u_curr = np.zeros((6, 1))
             self._last_joint_target = None
 
 
@@ -172,11 +213,11 @@ def run_mpc_background(shared_state, mpc_horizon, status_callback=None):
         while True:
             with shared_state.lock:
                 following = shared_state.following_trajectory
-                traj_len = len(shared_state.trajectory_window)
+                traj_len = len(shared_state.trajectory_queue)
 
             if following:
                 if sim_thread is None:
-                    if traj_len == mpc_horizon+1:
+                    if traj_len >= mpc_horizon+1:
                         print("[MPC Thread] Trajectory following activated with a valid trajectory!")
                         msg = "MPC: Trajectory following activated, starting simulation..."
                         if status_callback and msg != last_status:

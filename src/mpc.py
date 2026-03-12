@@ -355,6 +355,8 @@ class MPC(object):
 
         _, u_pred = self.solve_mpc(x0, u0=self.u_prev)
 
+        self.shared_state.consume_one()
+
         u_cmd = np.array(u_pred[0])
         self.u_prev = u_cmd.copy()
 

@@ -1415,7 +1415,7 @@ class IMUGUI:
         pose6 = np.concatenate([position, orientation])
         T = self._workspace_offset @ ur_utils.pose6_to_T(pose6)
         try:
-            joints = self._ik_robot.IK("elbow_down", T)
+            joints = self._ik_robot.IK("elbow_up", T)
             if np.any(np.isnan(joints)):
                 return None
             return joints

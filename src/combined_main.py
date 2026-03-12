@@ -19,8 +19,8 @@ try:
 except ImportError:
     HAS_URX = False
 
-SAMPLING_RATE = 100 # Hz
-MPC_HORIZON = SAMPLING_RATE // 20 # sec = horizon_samples / sampling_rate
+SAMPLING_RATE = 10 # Hz
+MPC_HORIZON = SAMPLING_RATE // 10 # sec = horizon_samples / sampling_rate
 
 # ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
 # Hardware max from datasheet:

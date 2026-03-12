@@ -20,11 +20,11 @@ except ImportError:
     HAS_URX = False
 
 SAMPLING_RATE = 50 # Hz
-MPC_HORIZON = SAMPLING_RATE // 50 # sec = horizon_samples / sampling_rate
+MPC_HORIZON = SAMPLING_RATE // 30 # sec = horizon_samples / sampling_rate
 # The workspace offset MUST place the robot away from wrist singularities.
 # [0.5, 0.5, 0.5, 0, 0, 0] has zero rotation which aligns wrist axes (singular).
 # Adding a small rotation breaks the singularity and makes IK stable.
-WORKSPACE_OFFSET = pose6_to_T([0.5, 0.3, 0.5, 0.1, 0.2, 0])
+WORKSPACE_OFFSET = pose6_to_T([0.5, 0.3, 0.5, 0.1, 0.2, 0.3])
 
 # ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
 # Hardware max from datasheet:
@@ -277,7 +277,9 @@ def run_mpc_background(shared_state, mpc_horizon, status_callback=None):
                             shared_state=shared_state,
                             mpc_horizon=mpc_horizon,
                             dt= 1 / SAMPLING_RATE,
-                            workspace_offset=WORKSPACE_OFFSET
+                            workspace_offset=WORKSPACE_OFFSET,
+                            vj=VJ,
+                            aj=AJ
                         )
                         sim_thread.start()
                     else:

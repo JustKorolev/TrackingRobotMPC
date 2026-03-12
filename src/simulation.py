@@ -154,3 +154,69 @@ class EmbeddedSimEnvironment(object):
 
         plt.tight_layout()
         plt.savefig(f"./tracking_diagnosis/error_diagnosis.png")
+
+    def visualize_end_effector(self):
+        """Compute FK for every simulated joint state and plot end-effector XYZ."""
+        if self.ran_iterations == 0:
+            print("Please run the simulation first with the method 'run'.")
+            return
+
+        t = self.t
+        x_vec = self.x_vec
+        n_pts = x_vec.shape[1]
+
+        ee_pos = np.zeros((3, n_pts))
+        for k in range(n_pts):
+            theta_mod_rad = x_vec[:, k]
+            theta_class_rad = self.model.DHModifiedToClassical(theta_mod_rad)
+            theta_class_deg = np.rad2deg(theta_class_rad)
+            T = self.model.FK(theta_class_deg)
+            ee_pos[:, k] = T[:3, 3]
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+
+        ax_xyz = axes[0, 0]
+        ax_xyz.set_title("End-Effector Position vs Time")
+        ax_xyz.plot(t, ee_pos[0, :], '-', label="X")
+        ax_xyz.plot(t, ee_pos[1, :], '-', label="Y")
+        ax_xyz.plot(t, ee_pos[2, :], '-', label="Z")
+        ax_xyz.set_xlabel("Time [s]")
+        ax_xyz.set_ylabel("Position [m]")
+        ax_xyz.grid()
+        ax_xyz.legend()
+
+        ax_xy = axes[0, 1]
+        ax_xy.set_title("End-Effector XY (Top View)")
+        ax_xy.plot(ee_pos[0, :], ee_pos[1, :], '-')
+        ax_xy.scatter(ee_pos[0, 0], ee_pos[1, 0], c='green', s=80, zorder=5, label="Start")
+        ax_xy.scatter(ee_pos[0, -1], ee_pos[1, -1], c='red', s=80, zorder=5, label="End")
+        ax_xy.set_xlabel("X [m]")
+        ax_xy.set_ylabel("Y [m]")
+        ax_xy.axis('equal')
+        ax_xy.grid()
+        ax_xy.legend()
+
+        ax_xz = axes[1, 0]
+        ax_xz.set_title("End-Effector XZ (Side View)")
+        ax_xz.plot(ee_pos[0, :], ee_pos[2, :], '-')
+        ax_xz.scatter(ee_pos[0, 0], ee_pos[2, 0], c='green', s=80, zorder=5, label="Start")
+        ax_xz.scatter(ee_pos[0, -1], ee_pos[2, -1], c='red', s=80, zorder=5, label="End")
+        ax_xz.set_xlabel("X [m]")
+        ax_xz.set_ylabel("Z [m]")
+        ax_xz.axis('equal')
+        ax_xz.grid()
+        ax_xz.legend()
+
+        ax_3d = fig.add_subplot(2, 2, 4, projection='3d')
+        axes[1, 1].remove()
+        ax_3d.set_title("End-Effector 3D Trajectory")
+        ax_3d.plot(ee_pos[0, :], ee_pos[1, :], ee_pos[2, :], '-')
+        ax_3d.scatter(*ee_pos[:, 0], c='green', s=80, label="Start")
+        ax_3d.scatter(*ee_pos[:, -1], c='red', s=80, label="End")
+        ax_3d.set_xlabel("X [m]")
+        ax_3d.set_ylabel("Y [m]")
+        ax_3d.set_zlabel("Z [m]")
+        ax_3d.legend()
+
+        plt.tight_layout()
+        plt.savefig("./tracking_diagnosis/end_effector.png")

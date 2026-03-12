@@ -54,6 +54,7 @@ class MPCSimulationThread(threading.Thread):
             self.status = "completed"
             sim_env_tracking.visualize()
             sim_env_tracking.visualize_error()
+            sim_env_tracking.visualize_end_effector()
             print("[MPC Thread] Simulation completed successfully!")
 
         except Exception as e:

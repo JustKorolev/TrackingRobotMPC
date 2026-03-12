@@ -32,12 +32,12 @@ class UR10e():
         d_i: float  # in meters
         theta_i: float  # in degrees
 
-    def get_limits(self):
+    def get_limits(self, vj, aj):
         x_lim = 2*np.pi * np.ones(6) # radians
-        u_lim = 0.5 * np.ones(6) # radians/sec
-        delta_u_lim = 1 * np.ones(6) # radians/sec²
+        u_lim = vj * np.ones(6) # radians/sec
+        acc_u_lim = aj * np.ones(6) # radians/sec²
 
-        return x_lim, u_lim, delta_u_lim
+        return x_lim, u_lim, acc_u_lim
 
     def get_classical_dh_parameters(self, joint_angles) -> DHParameters:
         alpha = [90, 0, 0, 90, -90, 0]

@@ -3,19 +3,16 @@ import time
 import numpy as np
 import urx
 
-aj = 1      # rad/s²
-vj = 0.5    # rad/s
-al = 0.1    # m/s²
-vl = 0.03   # m/s
-
 class URXControlThread(threading.Thread):
-    def __init__(self, shared_state, robot_ip, hz=100):
+    def __init__(self, shared_state, robot_ip, hz=100, vj=0.5, aj=0.1):
         super().__init__(daemon=True)
         self.shared_state = shared_state
         self.robot_ip = robot_ip
         self.dt = 1.0 / hz
         self.robot = None
         self.running = True
+        self.vj = vj
+        self.aj = aj
 
     def run(self):
         try:
@@ -72,7 +69,7 @@ class URXControlThread(threading.Thread):
         cmd = np.array(u).reshape(-1)
 
         joint_vels = cmd.tolist()
-        joint_vels = np.clip(joint_vels, -vj, vj).tolist()
+        joint_vels = np.clip(joint_vels, -self.vj, self.vj).tolist()
         print(joint_vels)
 
         self.robot.speedj(
@@ -83,7 +80,7 @@ class URXControlThread(threading.Thread):
 
     def send_zero(self):
         if self.robot is not None:
-            self.robot.speedj([0, 0, 0, 0, 0, 0], acc=aj, min_time=self.dt)
+            self.robot.speedj([0, 0, 0, 0, 0, 0], acc=self.aj, min_time=self.dt)
 
     def stop(self):
         self.running = False

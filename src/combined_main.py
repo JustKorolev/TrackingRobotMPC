@@ -16,6 +16,8 @@ from src.urx_control_thread import URXControlThread
 
 SAMPLING_RATE = 100 # Hz
 MPC_HORIZON = SAMPLING_RATE // 20 # sec = horizon_samples / sampling_rate
+VJ = 0.5 # RAD/SEC
+AJ = 1 # RAD/SEC^2
 
 class SharedTrajectoryState:
     """Thread-safe shared state for IMU and MPC communication."""
@@ -82,7 +84,7 @@ def run_mpc_background(shared_state, mpc_horizon, status_callback=None):
                         sim_thread = MPCSimulationThread(
                             shared_state=shared_state,
                             mpc_horizon=mpc_horizon,
-                            dt=1 / SAMPLING_RATE
+                            dt= 1 / SAMPLING_RATE
                         )
                         sim_thread.start()
                     else:
@@ -158,7 +160,9 @@ def main():
     urx_thread = URXControlThread(
         shared_state=shared_state,
         robot_ip="192.168.1.10",
-        hz=100
+        hz=100,
+        vj=VJ,
+        aj=AJ
     )
     urx_thread.start()
 

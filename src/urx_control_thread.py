@@ -74,7 +74,7 @@ class URXControlThread(threading.Thread):
 
         self.robot.speedj(
             joint_vels,
-            acc=aj,
+            acc=self.aj,
             min_time=self.dt
         )
 

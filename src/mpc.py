@@ -350,7 +350,7 @@ class MPC(object):
         :rtype: ca.DM
         """
         x_traj = np.array(self.shared_state.trajectory_window)
-        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1)) # TODO: THIS IS VERY POSSIBLY WRONG
+        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1))
         self.set_reference(x_sp)
 
         _, u_pred = self.solve_mpc(x0, u0=self.u_prev)

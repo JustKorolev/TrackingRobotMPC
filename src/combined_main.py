@@ -19,15 +19,15 @@ try:
 except ImportError:
     HAS_URX = False
 
-SAMPLING_RATE = 10 # Hz
-MPC_HORIZON = SAMPLING_RATE // 10 # sec = horizon_samples / sampling_rate
+SAMPLING_RATE = 50 # Hz
+MPC_HORIZON = SAMPLING_RATE // 50 # sec = horizon_samples / sampling_rate
 
 # ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
 # Hardware max from datasheet:
 #   Joints 0-1 (base, shoulder): 2.094 rad/s  (120 deg/s)
 #   Joints 2-5 (elbow, wrists):  3.142 rad/s  (180 deg/s)
 # Working limits (conservative for safety):
-VJ = 0.5   # rad/s  -- uniform working velocity limit for MPC
+VJ = 1   # rad/s  -- uniform working velocity limit for MPC
 AJ = 1.0   # rad/s² -- uniform working acceleration limit for MPC
 
 # Per-joint working velocity limits (rad/s).

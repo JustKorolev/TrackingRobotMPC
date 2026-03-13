@@ -10,7 +10,7 @@ import tkinter as tk
 import numpy as np
 from collections import deque
 from src.utils import *
-from src.imu import IMUGUI
+from src.tracking import GUI
 from src.trajectory_tracking import MPCSimulationThread
 
 try:
@@ -21,11 +21,11 @@ except ImportError:
 
 # TODO: MODIFY ALL THE PARAMETERS BELOW BEFORE TESTING
 SAMPLING_RATE = 50 # Hz
-MPC_HORIZON = SAMPLING_RATE // 10 # sec = horizon_samples / sampling_rate
+MPC_HORIZON = SAMPLING_RATE // 20 # sec = horizon_samples / sampling_rate
 # The workspace offset MUST place the robot away from wrist singularities.
 # [0.5, 0.5, 0.5, 0, 0, 0] has zero rotation which aligns wrist axes (singular).
 # Adding a small rotation breaks the singularity and makes IK stable.
-WORKSPACE_OFFSET = pose6_to_T([0.5, 0.3, 0.5, 0.1, 0.2, 0.3])
+WORKSPACE_OFFSET = pose6_to_T([0.5, 0, 0.5, 0.1, 0.2, 0.3])
 
 # ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
 # Hardware max from datasheet:
@@ -160,40 +160,40 @@ class SharedTrajectoryState:
             if self.collision_detected:
                 return
 
-            # if self._last_joint_target is None:
-            #     safe, reason = collision_check(
-            #         self._collision_robot, theta_next,
-            #         JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
-            #     if not safe:
-            #         collision_reason = reason
-            #     else:
-            #         self._last_joint_target = theta_next.copy()
-            #         self.trajectory_queue.append(theta_next)
-            # else:
-            #     points = interpolate_joint_segment(
-            #         self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS)
-            #
-            #     if len(points) > 1:
-            #         delta = theta_next - self._last_joint_target
-            #         v_req = np.abs(delta) / dt
-            #         worst = np.argmax(v_req / JOINT_VEL_LIMITS)
-            #         print(f"[INTERP] Joint {worst} needs "
-            #               f"{v_req[worst]:.2f} rad/s (limit {JOINT_VEL_LIMITS[worst]:.2f}), "
-            #               f"N={len(points)}")
-            #
-            #     for pt in points:
-            #         safe, reason = collision_check(
-            #             self._collision_robot, pt,
-            #             JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
-            #         if not safe:
-            #             collision_reason = reason
-            #             break
-            #         self.trajectory_queue.append(pt)
-            #
-            #     if collision_reason is None:
-            #         while len(self.trajectory_queue) > MAX_QUEUE_LEN:
-            #             self.trajectory_queue.popleft()
-            #         self._last_joint_target = theta_next.copy()
+            if self._last_joint_target is None:
+                safe, reason = collision_check(
+                    self._collision_robot, theta_next,
+                    JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
+                if not safe:
+                    collision_reason = reason
+                else:
+                    self._last_joint_target = theta_next.copy()
+                    self.trajectory_queue.append(theta_next)
+            else:
+                points = interpolate_joint_segment(
+                    self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS)
+
+                if len(points) > 1:
+                    delta = theta_next - self._last_joint_target
+                    v_req = np.abs(delta) / dt
+                    worst = np.argmax(v_req / JOINT_VEL_LIMITS)
+                    print(f"[INTERP] Joint {worst} needs "
+                          f"{v_req[worst]:.2f} rad/s (limit {JOINT_VEL_LIMITS[worst]:.2f}), "
+                          f"N={len(points)}")
+
+                for pt in points:
+                    safe, reason = collision_check(
+                        self._collision_robot, pt,
+                        JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
+                    if not safe:
+                        collision_reason = reason
+                        break
+                    self.trajectory_queue.append(pt)
+
+                if collision_reason is None:
+                    while len(self.trajectory_queue) > MAX_QUEUE_LEN:
+                        self.trajectory_queue.popleft()
+                    self._last_joint_target = theta_next.copy()
 
             # --- direct append only, no interpolation ---
             safe, reason = collision_check(
@@ -260,7 +260,7 @@ class SharedTrajectoryState:
 def run_imu_gui(shared_state):
     """Run the IMU GUI in the main thread (required for Tkinter)."""
     root = tk.Tk()
-    app = IMUGUI(root, shared_state, SAMPLING_RATE, MPC_HORIZON, WORKSPACE_OFFSET)
+    app = GUI(root, shared_state, SAMPLING_RATE, MPC_HORIZON, WORKSPACE_OFFSET)
     root.mainloop()
 
 

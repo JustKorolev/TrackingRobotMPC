@@ -339,7 +339,7 @@ class MPC(object):
 
         return optvar['x'], optvar['u']
 
-    def mpc_controller(self, x0, t):
+    def mpc_controller(self, x0, t, prerecorded=False):
         """
         MPC controller wrapper.
         Gets first control input to apply to the system.
@@ -349,9 +349,19 @@ class MPC(object):
         :return: control input
         :rtype: ca.DM
         """
-        x_traj = np.array(self.shared_state.trajectory_window)
-        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1))
+
+        if prerecorded:
+            try:
+                x_traj = self.model.get_joint_trajectory(t, self.Nt + 1)
+            except IndexError:
+                self.shared_state.stop_following()
+        else:
+            x_traj = np.array(self.shared_state.trajectory_window)
+        x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order="F")
         self.set_reference(x_sp)
+        print("x_sp")
+        print(x_sp)
+
 
         _, u_pred = self.solve_mpc(x0, u0=self.u_prev)
 

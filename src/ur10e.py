@@ -205,7 +205,7 @@ class UR10e():
 
         # Current saved trajectories are poses
         if t == 0.0:
-            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_4.txt")
+            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_24.txt")
             print(f_path)
             self.pose_trajectory = np.loadtxt(f_path, ndmin=2)[:,1:]
             print((self.n, int(self.pose_trajectory.shape[0])))
@@ -213,12 +213,13 @@ class UR10e():
             # Pose to joint trajectory conversion
             joint_trajectory = []
             for pose6 in self.pose_trajectory:
-                pose_T = utils.pose6_to_T([0.5, 0.5, 0.5, 0, 0, 0]) @ utils.pose6_to_T(pose6) # TODO: FIX THIS PRE TRASNFORMATION
-                joints = self.IK("elbow_down", pose_T)
+                pose_T = self.workspace_offset @ utils.pose6_to_T(pose6) # TODO: FIX THIS PRE TRASNFORMATION
+                joints = self.IK("elbow_up", pose_T)
                 joint_trajectory.append(joints)
 
             joint_trajectory = np.array(joint_trajectory)
             self.trajectory = joint_trajectory.T
+            print(self.trajectory)
 
         id_s = int(round(t / self.dt))
         id_e = int(round(t / self.dt)) + npoints

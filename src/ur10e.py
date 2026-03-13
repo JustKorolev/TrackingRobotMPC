@@ -205,7 +205,7 @@ class UR10e():
 
         # Current saved trajectories are poses
         if t == 0.0:
-            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_23.txt")
+            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_23.txt") # TODO: CHANGE TRAJECTORY HERE
             print(f_path)
             self.pose_trajectory = np.loadtxt(f_path, ndmin=2)[:,1:]
             print((self.n, int(self.pose_trajectory.shape[0])))

@@ -19,8 +19,9 @@ try:
 except ImportError:
     HAS_URX = False
 
+# TODO: MODIFY ALL THE PARAMETERS BELOW BEFORE TESTING
 SAMPLING_RATE = 50 # Hz
-MPC_HORIZON = SAMPLING_RATE // 5 # sec = horizon_samples / sampling_rate
+MPC_HORIZON = SAMPLING_RATE // 6 # sec = horizon_samples / sampling_rate
 # The workspace offset MUST place the robot away from wrist singularities.
 # [0.5, 0.5, 0.5, 0, 0, 0] has zero rotation which aligns wrist axes (singular).
 # Adding a small rotation breaks the singularity and makes IK stable.

@@ -3,6 +3,7 @@ import time
 import os
 import glob
 from collections import deque
+import src.utils as utils
 
 import numpy as np
 import tkinter as tk
@@ -765,6 +766,9 @@ class GUI:
 
         try:
             T = self.local_pose_to_base_transform(position, None)
+            T[:3, :3] = utils.rot_x(-np.pi/2 + 0.05)[:3,:3]
+            print("THAT T")
+            print(T)
 
             candidates = []
             for sol_type in ("elbow_up", "elbow_down", "elbow_up_2", "elbow_down_2"):
@@ -855,7 +859,7 @@ class GUI:
         T_base[:3, :3] = np.eye(3)
 
         origin_base = self._workspace_offset[:3, 3].copy()
-        disp_base = np.array([0.0, position_local[1], position_local[2]], dtype=float)
+        disp_base = np.array([position_local[1], 0.0, position_local[2]], dtype=float)
 
         T_base[:3, 3] = origin_base + disp_base
         return T_base

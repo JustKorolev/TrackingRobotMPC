@@ -46,9 +46,13 @@ class EmbeddedSimEnvironment(object):
         while self.shared_state.following_trajectory:
             loop_start = time.time()
 
-            # x = x_vec[:, -1].reshape(self.model.n, 1) # TODO: REMOVE THIS FOR ACTUAL ROBOT
-            x_measured_deg = np.rad2deg(np.array(self.shared_state.joint_pos))
-            x = np.deg2rad(self.model.DHClassicaltoModified(x_measured_deg).reshape(self.model.n, 1)) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
+            x_measured = self.shared_state.joint_pos
+            x = self.model.DHClassicaltoModified(x_measured).reshape((self.model.n, 1)) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
+            print("curr_state")
+            print(x)
+            x = x_vec[:, -1].reshape((self.model.n, 1)) # TODO: REMOVE THIS FOR ACTUAL ROBOT
+            # print("2")
+            # print(x)
             u, error = self.controller(x, self.ran_iterations * self.dt, prerecorded=self.shared_state.prerecorded_flag)
             x_next = self.dynamics(x, u)
 

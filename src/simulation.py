@@ -48,7 +48,7 @@ class EmbeddedSimEnvironment(object):
 
             x = x_vec[:, -1].reshape(self.model.n, 1) # TODO: REMOVE THIS FOR ACTUAL ROBOT
             # x = np.array(self.shared_state.joint_pos).reshape(self.model.n, 1) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
-            u, error = self.controller(x, self.ran_iterations * self.dt, prerecorded=True) # TODO: set prerecorded to False for gyro trajectories
+            u, error = self.controller(x, self.ran_iterations * self.dt, prerecorded=self.shared_state.prerecorded_flag) # TODO: set prerecorded to False for gyro trajectories
             x_next = self.dynamics(x, u)
 
             with self.shared_state.lock:

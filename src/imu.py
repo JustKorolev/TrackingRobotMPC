@@ -39,7 +39,7 @@ class IMUGUI:
         self.GYRO_STATIONARY_THRESH = 0.03
         self.ACCEL_STATIONARY_MAG_THRESH = 0.5
         self.MAX_VELOCITY = 1.0
-        self.ACCEL_LP_ALPHA = 0.7
+        self.ACCEL_LP_ALPHA = 0.1
         self.ACCEL_CORRECTION_GAIN = 1.5
         self.GYRO_BIAS_ALPHA = 0.01
         self.ZUPT_LIN_ACCEL_THRESH = 0.04
@@ -180,6 +180,10 @@ class IMUGUI:
                                   bg="#4CAF50", fg="white", font=("TkDefaultFont", 9, "bold"),
                                   activebackground="#388E3C", activeforeground="white")
         self.home_btn.grid(row=5, column=4, padx=5, pady=(10, 0), sticky="w")
+
+        self.prerecorded_btn = tk.Button(top, text="Pre-recorded", command=self.shared_state.set_prerecorded_flag,
+                                         bg="#FF00EA", fg="white", font=("TkDefaultFont", 9, "bold"), activebackground="#B91989", activeforeground="white")
+        self.prerecorded_btn.grid(row=5, column=6, padx=5, pady=(10, 0), sticky="w")
 
         ttk.Label(top, text="Plot Trajectory").grid(row=6, column=0, sticky="w", pady=(10, 0))
         self.plot_traj_var = tk.StringVar()
@@ -1422,6 +1426,7 @@ class IMUGUI:
 
             if zupt_count >= self.ZUPT_REQUIRED_SAMPLES:
                 velocities[i] = np.zeros(3)
+                accel_lp = np.zeros(3)
             else:
                 velocities[i] = velocities[i - 1] + accel_use * dt
                 vel_mag = np.linalg.norm(velocities[i])
@@ -1615,6 +1620,7 @@ class IMUGUI:
 
                 if zupt_count >= self.ZUPT_REQUIRED_SAMPLES:
                     velocity[:] = 0.0
+                    accel_lp = np.zeros(3)
                 else:
                     velocity = velocity + accel_use * dt
                     vel_mag = np.linalg.norm(velocity)

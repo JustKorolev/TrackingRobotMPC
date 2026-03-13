@@ -21,7 +21,7 @@ except ImportError:
 
 # TODO: MODIFY ALL THE PARAMETERS BELOW BEFORE TESTING
 SAMPLING_RATE = 50 # Hz
-MPC_HORIZON = SAMPLING_RATE // 6 # sec = horizon_samples / sampling_rate
+MPC_HORIZON = SAMPLING_RATE // 10 # sec = horizon_samples / sampling_rate
 # The workspace offset MUST place the robot away from wrist singularities.
 # [0.5, 0.5, 0.5, 0, 0, 0] has zero rotation which aligns wrist axes (singular).
 # Adding a small rotation breaks the singularity and makes IK stable.
@@ -117,6 +117,7 @@ class SharedTrajectoryState:
         self.home_requested = False
         self.collision_detected = False
         self.collision_reason = ""
+        self.prerecorded_flag = False
 
         # Compute home joint angles from WORKSPACE_OFFSET via IK
         from src.ur10e import UR10e
@@ -152,56 +153,61 @@ class SharedTrajectoryState:
                 self.trajectory_queue.popleft()
 
     def append_joint_target(self, theta_next, dt):
-        """Append a joint-space target with automatic interpolation.
-
-        If the step from the previous target to theta_next would violate
-        any joint velocity limit, intermediate waypoints are inserted so
-        the robot follows the same path at a feasible speed.
-
-        If the queue grows beyond MAX_QUEUE_LEN the oldest points are
-        dropped so the robot jumps ahead to where the user is now
-        instead of accumulating unbounded lag.
-        """
+        """Append a joint-space target with interpolation disabled."""
         collision_reason = None
 
         with self.lock:
             if self.collision_detected:
                 return
 
-            if self._last_joint_target is None:
-                safe, reason = collision_check(
-                    self._collision_robot, theta_next,
-                    JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
-                if not safe:
-                    collision_reason = reason
-                else:
-                    self._last_joint_target = theta_next.copy()
-                    self.trajectory_queue.append(theta_next)
+            # if self._last_joint_target is None:
+            #     safe, reason = collision_check(
+            #         self._collision_robot, theta_next,
+            #         JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
+            #     if not safe:
+            #         collision_reason = reason
+            #     else:
+            #         self._last_joint_target = theta_next.copy()
+            #         self.trajectory_queue.append(theta_next)
+            # else:
+            #     points = interpolate_joint_segment(
+            #         self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS)
+            #
+            #     if len(points) > 1:
+            #         delta = theta_next - self._last_joint_target
+            #         v_req = np.abs(delta) / dt
+            #         worst = np.argmax(v_req / JOINT_VEL_LIMITS)
+            #         print(f"[INTERP] Joint {worst} needs "
+            #               f"{v_req[worst]:.2f} rad/s (limit {JOINT_VEL_LIMITS[worst]:.2f}), "
+            #               f"N={len(points)}")
+            #
+            #     for pt in points:
+            #         safe, reason = collision_check(
+            #             self._collision_robot, pt,
+            #             JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
+            #         if not safe:
+            #             collision_reason = reason
+            #             break
+            #         self.trajectory_queue.append(pt)
+            #
+            #     if collision_reason is None:
+            #         while len(self.trajectory_queue) > MAX_QUEUE_LEN:
+            #             self.trajectory_queue.popleft()
+            #         self._last_joint_target = theta_next.copy()
+
+            # --- direct append only, no interpolation ---
+            safe, reason = collision_check(
+                self._collision_robot, theta_next,
+                JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
+
+            if not safe:
+                collision_reason = reason
             else:
-                points = interpolate_joint_segment(
-                    self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS)
+                self.trajectory_queue.append(theta_next.copy())
+                self._last_joint_target = theta_next.copy()
 
-                if len(points) > 1:
-                    delta = theta_next - self._last_joint_target
-                    v_req = np.abs(delta) / dt
-                    worst = np.argmax(v_req / JOINT_VEL_LIMITS)
-                    print(f"[INTERP] Joint {worst} needs "
-                          f"{v_req[worst]:.2f} rad/s (limit {JOINT_VEL_LIMITS[worst]:.2f}), "
-                          f"N={len(points)}")
-
-                for pt in points:
-                    safe, reason = collision_check(
-                        self._collision_robot, pt,
-                        JOINT_POS_LIMITS, MIN_LINK_DISTANCE)
-                    if not safe:
-                        collision_reason = reason
-                        break
-                    self.trajectory_queue.append(pt)
-
-                if collision_reason is None:
-                    while len(self.trajectory_queue) > MAX_QUEUE_LEN:
-                        self.trajectory_queue.popleft()
-                    self._last_joint_target = theta_next.copy()
+                while len(self.trajectory_queue) > MAX_QUEUE_LEN:
+                    self.trajectory_queue.popleft()
 
         if collision_reason is not None:
             self.hard_stop(collision_reason)
@@ -212,6 +218,13 @@ class SharedTrajectoryState:
             self.following_trajectory = False
             self.robot_enabled = True
             print(f"[HOME] Homing to {np.degrees(self.home_joints).round(1)} deg")
+
+    def set_prerecorded_flag(self):
+        if self.prerecorded_flag:
+            self.prerecorded_flag = False
+        else:
+            self.prerecorded_flag = True
+        print("Pre-recorded flag set to " + str(self.prerecorded_flag))
 
     def start_following(self):
         with self.lock:

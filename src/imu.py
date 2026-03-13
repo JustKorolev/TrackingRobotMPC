@@ -3,6 +3,8 @@ import time
 import os
 import glob
 from collections import deque
+import sys
+import subprocess
 
 import numpy as np
 import serial.tools.list_ports
@@ -39,7 +41,7 @@ class IMUGUI:
         self.GYRO_STATIONARY_THRESH = 0.03
         self.ACCEL_STATIONARY_MAG_THRESH = 0.5
         self.MAX_VELOCITY = 1.0
-        self.ACCEL_LP_ALPHA = 0.1
+        self.ACCEL_LP_ALPHA = 0.7
         self.ACCEL_CORRECTION_GAIN = 1.5
         self.GYRO_BIAS_ALPHA = 0.01
         self.ZUPT_LIN_ACCEL_THRESH = 0.04
@@ -173,7 +175,7 @@ class IMUGUI:
         self.follow_btn = ttk.Button(top, text="Start Following", command=self.shared_state.start_following)
         self.follow_btn.grid(row=5, column=2, padx=5, pady=(10, 0), sticky="w")
 
-        self.stop_follow_btn = ttk.Button(top, text="Stop Following", command=self.shared_state.stop_following)
+        self.stop_follow_btn = ttk.Button(top, text="Stop Following", command=self.stop_following_callback)
         self.stop_follow_btn.grid(row=5, column=3, padx=5, pady=(10, 0), sticky="w")
 
         self.home_btn = tk.Button(top, text="Home Arm", command=self.shared_state.request_home,
@@ -182,7 +184,8 @@ class IMUGUI:
         self.home_btn.grid(row=5, column=4, padx=5, pady=(10, 0), sticky="w")
 
         self.prerecorded_btn = tk.Button(top, text="Pre-recorded", command=self.shared_state.set_prerecorded_flag,
-                                         bg="#FF00EA", fg="white", font=("TkDefaultFont", 9, "bold"), activebackground="#B91989", activeforeground="white")
+                                  bg="#FF00EA", fg="white", font=("TkDefaultFont", 9, "bold"),
+                                  activebackground="#B91989", activeforeground="white")
         self.prerecorded_btn.grid(row=5, column=6, padx=5, pady=(10, 0), sticky="w")
 
         ttk.Label(top, text="Plot Trajectory").grid(row=6, column=0, sticky="w", pady=(10, 0))
@@ -261,6 +264,28 @@ class IMUGUI:
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         self.refresh_trajectory_list()
+
+    def open_image_default_viewer(self):
+        relative_image_path = "..\\resources\\tel_aviv_impressed.png"
+        image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_image_path)
+
+        if not os.path.exists(image_path):
+            messagebox.showerror("Image Error", f"File not found:\n{image_path}")
+            return
+
+        try:
+            if os.name == "nt":  # Windows
+                os.startfile(image_path)
+            elif sys.platform == "darwin":  # macOS
+                subprocess.run(["open", image_path], check=True)
+            else:  # Linux
+                subprocess.run(["xdg-open", image_path], check=True)
+        except Exception as e:
+            messagebox.showerror("Image Error", f"Could not open image:\n{e}")
+
+    def stop_following_callback(self):
+        self.shared_state.stop_following()
+        self.open_image_default_viewer()
 
     def auto_detect_port(self):
         ports = list(serial.tools.list_ports.comports())
@@ -1426,7 +1451,6 @@ class IMUGUI:
 
             if zupt_count >= self.ZUPT_REQUIRED_SAMPLES:
                 velocities[i] = np.zeros(3)
-                accel_lp = np.zeros(3)
             else:
                 velocities[i] = velocities[i - 1] + accel_use * dt
                 vel_mag = np.linalg.norm(velocities[i])
@@ -1618,16 +1642,17 @@ class IMUGUI:
                 else:
                     zupt_count = 0
 
+                prev_velocity = velocity.copy()
+
                 if zupt_count >= self.ZUPT_REQUIRED_SAMPLES:
                     velocity[:] = 0.0
-                    accel_lp = np.zeros(3)
                 else:
                     velocity = velocity + accel_use * dt
                     vel_mag = np.linalg.norm(velocity)
                     if vel_mag > self.MAX_VELOCITY:
                         velocity *= self.MAX_VELOCITY / vel_mag
 
-                position = position + velocity * dt
+                position = position + 0.5 * (velocity + prev_velocity) * dt
 
                 if stream_count < self._ik_warmup_samples:
                     joints = self._last_valid_joints.copy()

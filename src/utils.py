@@ -509,3 +509,12 @@ def wrap_joints_cas(q):
     """
     two_pi = 2 * np.pi
     return q - two_pi * ca.floor((q + np.pi) / two_pi)
+
+def DHModifiedToClassical(self, theta_mod):
+    theta_mod = np.asarray(theta_mod, dtype=float).reshape(6,)
+
+    home_class = np.deg2rad([0, -90, 0, -90, 0, 180])
+
+    theta_class = theta_mod + home_class
+
+    return theta_class

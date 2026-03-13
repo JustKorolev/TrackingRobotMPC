@@ -25,15 +25,15 @@ MPC_HORIZON = SAMPLING_RATE // 20 # sec = horizon_samples / sampling_rate
 # The workspace offset MUST place the robot away from wrist singularities.
 # [0.5, 0.5, 0.5, 0, 0, 0] has zero rotation which aligns wrist axes (singular).
 # Adding a small rotation breaks the singularity and makes IK stable.
-WORKSPACE_OFFSET = pose6_to_T([0.5, 0, 0.5, 0.1, 0.2, 0.3])
+WORKSPACE_OFFSET = pose6_to_T([0, -0.5, 0.6, np.pi/2, 0.05, 0.05])
 
 # ── UR10e joint limits (CHANGE THESE for your actual robot) ──────────────
 # Hardware max from datasheet:
 #   Joints 0-1 (base, shoulder): 2.094 rad/s  (120 deg/s)
 #   Joints 2-5 (elbow, wrists):  3.142 rad/s  (180 deg/s)
 # Working limits (conservative for safety):
-VJ = 1   # rad/s  -- uniform working velocity limit for MPC
-AJ = 2.0   # rad/s² -- uniform working acceleration limit for MPC
+VJ = 0.4   # rad/s  -- uniform working velocity limit for MPC
+AJ = 0.8   # rad/s² -- uniform working acceleration limit for MPC
 
 # Per-joint working velocity limits (rad/s).
 # UPDATE THESE when you know exact per-joint limits for your setup.
@@ -122,7 +122,7 @@ class SharedTrajectoryState:
         # Compute home joint angles from WORKSPACE_OFFSET via IK
         from src.ur10e import UR10e
         self._collision_robot = UR10e()
-        self.home_joints = self._collision_robot.IK("elbow_up", WORKSPACE_OFFSET)
+        self.home_joints = self._collision_robot.IK("elbow_up_2", WORKSPACE_OFFSET)
         print(f"[HOME] Home joints (deg): {np.degrees(self.home_joints).round(1)}")
 
         self._last_joint_target = None
@@ -370,8 +370,8 @@ def main():
     if HAS_URX:
         urx_thread = URXControlThread(
             shared_state=shared_state,
-            robot_ip="192.168.1.10",
-            hz=100,
+            robot_ip="192.168.0.2",
+            hz=10,
             vj=VJ,
             aj=AJ,
             joint_pos_limits=JOINT_POS_LIMITS,

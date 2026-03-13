@@ -21,7 +21,7 @@ from src.ur10e import UR10e
 
 
 class MediaPipeHandTracker:
-    def __init__(self, cam_index=0, y_span_m=0.7, z_span_m=0.4, alpha=0.25):
+    def __init__(self, cam_index=1, y_span_m=0.7, z_span_m=0.4, alpha=0.25):
         self.cam_index = cam_index
 
         # Screen-space spans mapped into robot base-frame motion:

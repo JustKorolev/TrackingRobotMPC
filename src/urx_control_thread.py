@@ -2,6 +2,8 @@ import threading
 import time
 import numpy as np
 import urx
+from src.ur10e import UR10e
+import src.utils as utils
 
 from src.utils import collision_check
 
@@ -18,6 +20,7 @@ class URXControlThread(threading.Thread):
         self.aj = aj
         self.joint_pos_limits = joint_pos_limits
         self.min_link_dist = min_link_dist
+        self.robot_model = UR10e()
 
     def run(self):
         try:
@@ -48,8 +51,22 @@ class URXControlThread(threading.Thread):
                         self.shared_state.home_requested = False
                     try:
                         home_q = self.shared_state.home_joints.tolist()
+                        classical_joint_angles = np.rad2deg(self.robot_model.DHModifiedToClassical(home_q))
+
+                        Ttp_pen = utils.trans_z(0.3)
+
+                        safe = utils.SafetyCheck(self.robot_model, classical_joint_angles)
+                        
+                        print(self.robot_model.FK(classical_joint_angles))
+                        # print(self.robot_model.FK(classical_joint_angles, Ttp_pen))
+                        
+                        if not safe:
+                            shutdown = True
+                            print("NOT SAFE, ABORTING")
+                            break
+                        
                         print(f"[URX] Moving to home position...")
-                        self.robot.movej(home_q, vel=self.vj, acc=self.aj)
+                        self.robot.movej(np.deg2rad(classical_joint_angles), vel=self.vj, acc=self.aj)
                         self.shared_state.joint_pos = self.robot.getj()
                         print(f"[URX] Home reached.")
                     except Exception as e:
@@ -60,6 +77,24 @@ class URXControlThread(threading.Thread):
 
                 try:
                     if enabled:
+                        curr_joints = np.array(self.robot.getj()).reshape((6,1))
+                        future_joints = (curr_joints + 0.5 * u_curr)
+                        
+                        classical_joint_angles = np.rad2deg(future_joints)
+
+                        Ttp_pen = utils.trans_z(0.3)
+
+                        safe = utils.SafetyCheck(self.robot_model, classical_joint_angles)
+                        
+                        # print("FKIN")
+                        # print(self.robot_model.FK(np.rad2deg(curr_joints)))
+                        print(u_curr)
+                        
+                        if not safe:
+                            shutdown = True
+                            print("NOT SAFE, ABORTING")
+                            break
+                        
                         self.send_command(u_curr)
                     else:
                         self.send_zero()
@@ -98,6 +133,7 @@ class URXControlThread(threading.Thread):
             if not safe:
                 self.send_zero()
                 self.shared_state.hard_stop(reason)
+                print("AWOOGA NOT SAFE")
                 return
 
         self.robot.speedj(

@@ -359,8 +359,6 @@ class MPC(object):
             x_traj = np.array(self.shared_state.trajectory_window)
         x_sp = x_traj.reshape(self.Nx * (self.Nt + 1), order="F")
         self.set_reference(x_sp)
-        print("x_sp")
-        print(x_sp)
 
 
         _, u_pred = self.solve_mpc(x0, u0=self.u_prev)

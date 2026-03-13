@@ -205,7 +205,7 @@ class UR10e():
 
         # Current saved trajectories are poses
         if t == 0.0:
-            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_24.txt")
+            f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../trajectories/traj_23.txt")
             print(f_path)
             self.pose_trajectory = np.loadtxt(f_path, ndmin=2)[:,1:]
             print((self.n, int(self.pose_trajectory.shape[0])))
@@ -219,7 +219,6 @@ class UR10e():
 
             joint_trajectory = np.array(joint_trajectory)
             self.trajectory = joint_trajectory.T
-            print(self.trajectory)
 
         id_s = int(round(t / self.dt))
         id_e = int(round(t / self.dt)) + npoints

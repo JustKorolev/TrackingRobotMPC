@@ -69,6 +69,15 @@ class UR10e():
         theta_class = theta_mod + home_class
 
         return theta_class
+    
+    def DHClassicaltoModified(self, theta_class):
+        theta_class = np.asarray(theta_class, dtype=float).reshape(6,)
+
+        home_class = np.deg2rad([0, -90, 0, -90, 0, 180])
+
+        theta_mod = theta_class - home_class
+
+        return theta_mod
 
     def IK(self, solution_type: str, T_base_tp: np.ndarray, Ttp_pen: np.ndarray = None) -> np.ndarray:
 

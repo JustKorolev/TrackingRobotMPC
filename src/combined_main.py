@@ -371,7 +371,7 @@ def main():
         urx_thread = URXControlThread(
             shared_state=shared_state,
             robot_ip="192.168.0.2",
-            hz=10,
+            hz=100,
             vj=VJ,
             aj=AJ,
             joint_pos_limits=JOINT_POS_LIMITS,

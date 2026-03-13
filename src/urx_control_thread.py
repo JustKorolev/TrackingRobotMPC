@@ -139,12 +139,13 @@ class URXControlThread(threading.Thread):
         self.robot.speedj(
             joint_vels.tolist(),
             acc=self.aj,
-            min_time=self.dt
+            min_time=0.4
         )
 
     def send_zero(self):
-        if self.robot is not None:
-            self.robot.speedj([0, 0, 0, 0, 0, 0], acc=self.aj, min_time=self.dt)
+        return
+        # if self.robot is not None:
+        #     self.robot.speedj([0, 0, 0, 0, 0, 0], acc=self.aj, min_time=self.dt)
 
     def stop(self):
         self.running = False

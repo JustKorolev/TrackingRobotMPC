@@ -69,7 +69,7 @@ class UR10e():
         theta_class = theta_mod + home_class
 
         return theta_class
-    
+
     def DHClassicaltoModified(self, theta_class):
         theta_class = np.asarray(theta_class, dtype=float).reshape(6,)
 
@@ -223,7 +223,7 @@ class UR10e():
             joint_trajectory = []
             for pose6 in self.pose_trajectory:
                 pose_T = self.workspace_offset @ utils.pose6_to_T(pose6) # TODO: FIX THIS PRE TRASNFORMATION
-                joints = self.IK("elbow_up", pose_T)
+                joints = self.IK("elbow_up_2", pose_T)
                 joint_trajectory.append(joints)
 
             joint_trajectory = np.array(joint_trajectory)
@@ -243,7 +243,7 @@ class UR10e():
         :rtype: np.ndarray
         """
         T = self.workspace_offset
-        x0 = self.IK("elbow_up", T)
+        x0 = self.IK("elbow_up_2", T)
         print(x0)
         return x0
 

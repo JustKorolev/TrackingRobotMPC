@@ -704,7 +704,7 @@ class GUI:
         self._last_ik_ori = np.zeros(3, dtype=float)
 
         T = self.local_pose_to_base_transform(position)
-        joints = self._ik_robot.IK("elbow_up", T)
+        joints = self._ik_robot.IK("elbow_up_2", T)
         return joints
 
     def _ensure_tracker(self):
@@ -932,8 +932,8 @@ class GUI:
 
                 with self.state_lock:
                     self.live_t.append(t_live)
-                    self.live_x.append(position[0])  
-                    self.live_y.append(position[1])  
+                    self.live_x.append(position[0])
+                    self.live_y.append(position[1])
 
                 if stream_count == 0:
                     joints = self._pose_to_joint_angles(position)

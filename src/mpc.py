@@ -163,38 +163,28 @@ class MPC(object):
         self.con_ub = ca.vertcat(con_eq_ub, *con_ineq_ub)
 
         # Build NLP Solver (can also solve QP)
-        nlp = dict(x=opt_var, f=obj, g=con, p=param_s)
-        options = {
-            'ipopt.print_level': 0,
-            'print_time': False,
-            'verbose': False,
-            # 'expand': True
+        solver_dict = dict(x=opt_var, f=obj, g=con, p=param_s)
+        qp_opts = {
+            'max_iter': 20,
+            'error_on_fail': False,
+            'print_header': False,
+            'print_iter': False
         }
-        # EXTRA: explore these options!
-        # qp_opts = {
-        #     'max_iter': 10,
-        #     'error_on_fail': False,
-        #     'print_header': False,
-        #     'print_iter': False
-        # }
-        # options = {
-        #     'max_iter': 3,
-        #     'qpsol': 'qrqp',
-        #     "jit": False,
-        #     "jit_options": {'compiler': 'ccache gcc',
-        #                     'flags': ["-O2", "-pipe"]},
-        #     'compiler': 'shell',
-        #     # 'convexify_strategy': '',
-        #     'convexify_margin': 1e-5,
-        #     'jit_temp_suffix': False,
-        #     'print_header': False,
-        #     'print_time': False,
-        #     'print_iteration': False,
-        #     'qpsol_options': qp_opts
-        # }
+
+        options = {
+            'max_iter': 5,
+            'qpsol': 'qrqp',
+            'qpsol_options': qp_opts,
+            'convexify_margin': 1e-4,
+            'print_header': False,
+            'print_iteration': False,
+            'print_status': False,
+            'print_time': False,
+            'error_on_fail': False,
+        }
         if solver_opts is not None:
             options.update(solver_opts)
-        self.solver = ca.nlpsol('mpc_solver', 'ipopt', nlp, options)
+        self.solver = ca.nlpsol('mpc_solver', 'sqpmethod', solver_dict, options)
 
         # u_ref_solver initialization
         u_ref_i = ca.MX.sym('u_ref_i', self.Nu)
@@ -203,11 +193,8 @@ class MPC(object):
         err = self.dynamics(x_ref_i, u_ref_i) - x_ref_i_next
         J = ca.dot(err, err)
 
-        nlp = {'x': u_ref_i, 'f': J, 'p': ca.vertcat(x_ref_i, x_ref_i_next)}
-        self.u_ref_solver = ca.nlpsol('u_ref_solver', 'ipopt', nlp, {
-            'ipopt.print_level': 0,
-            'print_time': False
-        })
+        solver_dict = {'x': u_ref_i, 'f': J, 'p': ca.vertcat(x_ref_i, x_ref_i_next)}
+        self.u_ref_solver = ca.nlpsol('u_ref_solver', 'sqpmethod', solver_dict, options)
 
         build_solver_time += time.time()
         print('\n________________________________________')

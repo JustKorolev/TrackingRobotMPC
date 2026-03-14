@@ -706,7 +706,6 @@ class GUI:
 
             T = self.local_pose_to_base_transform(position)
             joints = self._ik_robot.IK("elbow_up_2", T)
-            print(joints)
             return joints
         except:
             return None

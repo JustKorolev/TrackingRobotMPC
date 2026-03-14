@@ -74,7 +74,7 @@ class MediaPipeHandTracker:
     def normalized_to_scaled_xy(self, x_norm, y_norm):
         x_scaled = (x_norm - 0.5) * self.x_span_m
         y_scaled = (0.5 - y_norm) * self.y_span_m
-        print(x_scaled, y_scaled)
+        # print(x_scaled, y_scaled)
         return np.array([x_scaled, y_scaled], dtype=float)
 
     def smooth(self, pos):
@@ -694,18 +694,22 @@ class GUI:
 
     def _pose_to_joint_angles(self, position):
 
-        # Return previous IK angles if new position is close enough to previous
-        if self._last_valid_joints is not None:
-            pos_change = np.linalg.norm(position - self._last_ik_pos)
-            if pos_change < 0.001:
-                return self._last_valid_joints.copy()
+        try:
+            # Return previous IK angles if new position is close enough to previous
+            if self._last_valid_joints is not None:
+                pos_change = np.linalg.norm(position - self._last_ik_pos)
+                if pos_change < 0.001:
+                    return self._last_valid_joints.copy()
 
-        self._last_ik_pos = position.copy()
-        self._last_ik_ori = np.zeros(3, dtype=float)
+            self._last_ik_pos = position.copy()
+            self._last_ik_ori = np.zeros(3, dtype=float)
 
-        T = self.local_pose_to_base_transform(position)
-        joints = self._ik_robot.IK("elbow_up_2", T)
-        return joints
+            T = self.local_pose_to_base_transform(position)
+            joints = self._ik_robot.IK("elbow_up_2", T)
+            print(joints)
+            return joints
+        except:
+            return None
 
     def _ensure_tracker(self):
         if self.hand_tracker is None:

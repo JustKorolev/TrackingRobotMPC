@@ -2,7 +2,6 @@ import numpy as np
 import casadi as ca
 import numpy as np
 
-
 def deg2rad(x_deg):
     return np.deg2rad(np.asarray(x_deg, dtype=float))
 

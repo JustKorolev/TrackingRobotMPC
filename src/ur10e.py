@@ -79,7 +79,7 @@ class UR10e():
 
         return theta_mod
 
-    def IK(self, solution_type: str, T_base_tp: np.ndarray, Ttp_pen: np.ndarray = None) -> np.ndarray:
+    def IK(self, solution_type: str, T_base_tp: np.ndarray, Ttp_pen: np.ndarray = utils.trans_z(0.3)) -> np.ndarray:
 
         dh_parameters = self.get_modified_dh_parameters([0, 0, 0, 0, 0, 0])  # Placeholder joint angles for DH parameters
         a = dh_parameters['a_i_prev']
@@ -179,7 +179,7 @@ class UR10e():
     def jacobian(self, q):
         pass
 
-    def FK(self, theta_1_6, Ttp_pen = None) -> np.ndarray:
+    def FK(self, theta_1_6, Ttp_pen = utils.trans_z(0.3)) -> np.ndarray:
         theta_deg = np.asarray(theta_1_6, dtype=float).reshape(6,)
 
         dh = self.get_classical_dh_parameters(theta_deg)

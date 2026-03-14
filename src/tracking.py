@@ -72,23 +72,6 @@ class MediaPipeHandTracker:
         self.trail_points.clear()
 
     def normalized_to_scaled_xy(self, x_norm, y_norm):
-        """
-        Webcam frame:
-            x_norm: left -> right
-            y_norm: top -> bottom
-
-        Robot base frame:
-            +x forward
-            +y left
-            +z up
-
-        Mapping for ZY plane:
-            screen horizontal -> robot y
-            screen vertical   -> robot z
-
-        We flip horizontal so moving hand LEFT on the mirrored webcam
-        corresponds to +y (left of robot base).
-        """
         x_scaled = (x_norm - 0.5) * self.x_span_m
         y_scaled = (0.5 - y_norm) * self.y_span_m
         print(x_scaled, y_scaled)
@@ -184,16 +167,7 @@ class MediaPipeHandTracker:
         if draw:
             cv2.putText(
                 frame,
-                "screen-x -> robot y | screen-y -> robot z",
-                (20, h - 45),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (200, 200, 200),
-                2
-            )
-            cv2.putText(
-                frame,
-                f"Y span = {self.x_span_m:.2f} m | Z span = {self.y_span_m:.2f} m",
+                f"X span = {self.x_span_m:.2f} m | Y span = {self.y_span_m:.2f} m",
                 (20, h - 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -239,8 +213,8 @@ class GUI:
 
         self.MAX_LIVE_SAMPLES = 500
         self.live_t = deque(maxlen=self.MAX_LIVE_SAMPLES)
+        self.live_x = deque(maxlen=self.MAX_LIVE_SAMPLES)
         self.live_y = deque(maxlen=self.MAX_LIVE_SAMPLES)
-        self.live_z = deque(maxlen=self.MAX_LIVE_SAMPLES)
 
         self._stream_thread_running = False
         self._stream_thread = None
@@ -374,8 +348,8 @@ class GUI:
         self.ax_live = self.fig.add_subplot(2, 1, 1)
         self.ax_traj = self.fig.add_subplot(2, 1, 2, projection="3d")
 
-        self.line_live_y, = self.ax_live.plot([], [], label="robot y")
-        self.line_live_z, = self.ax_live.plot([], [], label="robot z")
+        self.line_live_x, = self.ax_live.plot([], [], label="hand x")
+        self.line_live_y, = self.ax_live.plot([], [], label="hand y")
 
         self.ax_live.set_title("Live Hand-Mapped Robot Coordinates")
         self.ax_live.set_xlabel("Time (s)")
@@ -718,20 +692,9 @@ class GUI:
         ax.set_ylim(ymid - r, ymid + r)
         ax.set_zlim(zmid - r, zmid + r)
 
-    def _pose_to_joint_angles(self, position, orientation):
-        # return np.array([0,0,0,0,0,0])
-        """
-        Ignore orientation for drawing.
+    def _pose_to_joint_angles(self, position):
 
-        position is a local drawing displacement:
-            [0, dy, dz]
-
-        The final IK target:
-        - uses workspace_offset translation as the origin
-        - keeps base x fixed
-        - moves only in base y and z
-        - uses identity orientation
-        """
+        # Return previous IK angles if new position is close enough to previous
         if self._last_valid_joints is not None:
             pos_change = np.linalg.norm(position - self._last_ik_pos)
             if pos_change < 0.001:
@@ -740,40 +703,9 @@ class GUI:
         self._last_ik_pos = position.copy()
         self._last_ik_ori = np.zeros(3, dtype=float)
 
-        try:
-            T = self.local_pose_to_base_transform(position, None)
-            T[:3, :3] = utils.rot_x(-np.pi/2 + 0.05)[:3,:3]
-            # print("THAT T")
-            # print(T)
-
-            candidates = []
-            for sol_type in ("elbow_up", "elbow_down", "elbow_up_2", "elbow_down_2"):
-                try:
-                    sol = self._ik_robot.IK(sol_type, T)
-                    if not np.any(np.isnan(sol)):
-                        candidates.append(sol)
-                except Exception:
-                    continue
-
-            if not candidates:
-                return None
-
-            if self._last_valid_joints is None:
-                return candidates[0]
-
-            best = None
-            best_dist = np.inf
-            for c in candidates:
-                delta = (c - self._last_valid_joints + np.pi) % (2 * np.pi) - np.pi
-                dist = np.linalg.norm(delta)
-                if dist < best_dist:
-                    best_dist = dist
-                    best = c
-
-            return best
-
-        except Exception:
-            return None
+        T = self.local_pose_to_base_transform(position)
+        joints = self._ik_robot.IK("elbow_up", T)
+        return joints
 
     def _ensure_tracker(self):
         if self.hand_tracker is None:
@@ -819,7 +751,7 @@ class GUI:
         orientation_local = np.zeros(3, dtype=float)
         return position_local, orientation_local
 
-    def local_pose_to_base_transform(self, position_local, orientation_local=None):
+    def local_pose_to_base_transform(self, position_local):
         """
         Ignore workspace orientation for drawing motion.
 
@@ -843,8 +775,8 @@ class GUI:
 
         return T_target
 
-    def local_pose_to_base_position(self, position_local, orientation_local=None):
-        T_base = self.local_pose_to_base_transform(position_local, orientation_local)
+    def local_pose_to_base_position(self, position_local):
+        T_base = self.local_pose_to_base_transform(position_local)
         return T_base[:3, 3].copy()
 
     def record_trajectory(self):
@@ -864,8 +796,8 @@ class GUI:
 
         with self.state_lock:
             self.live_t.clear()
+            self.live_x.clear()
             self.live_y.clear()
-            self.live_z.clear()
 
         while self.running:
             elapsed = time.time() - start_wall
@@ -894,7 +826,7 @@ class GUI:
                 continue
 
             position_local, orientation_local = self.local_hand_pose_from_tracking(pos_zy)
-            position_base = self.local_pose_to_base_position(position_local, orientation_local)
+            position_base = self.local_pose_to_base_position(position_local)
 
             raw_times.append(elapsed)
             positions.append(position_base)
@@ -902,8 +834,8 @@ class GUI:
 
             with self.state_lock:
                 self.live_t.append(elapsed)
-                self.live_y.append(position_local[1])
-                self.live_z.append(position_local[2])
+                self.live_x.append(position_local[0])
+                self.live_y.append(position_local[0])
 
         try:
             cv2.destroyWindow("MediaPipe Hand Tracker")
@@ -949,8 +881,8 @@ class GUI:
 
         with self.state_lock:
             self.live_t.clear()
+            self.live_x.clear()
             self.live_y.clear()
-            self.live_z.clear()
 
         start_wall = time.time()
 
@@ -996,15 +928,15 @@ class GUI:
                 t_live = time.time() - start_wall
 
                 position, orientation = self.local_hand_pose_from_tracking(pos_zy)
-                position_base = self.local_pose_to_base_position(position, orientation)
+                position_base = self.local_pose_to_base_position(position)
 
                 with self.state_lock:
                     self.live_t.append(t_live)
-                    self.live_y.append(position[1])   # local y displacement
-                    self.live_z.append(position[2])   # local z displacement
+                    self.live_x.append(position[0])  
+                    self.live_y.append(position[1])  
 
                 if stream_count == 0:
-                    joints = self._pose_to_joint_angles(position, orientation)
+                    joints = self._pose_to_joint_angles(position)
                     if joints is None:
                         joints = self._ik_robot.get_initial_pose()
                     self._last_valid_joints = joints.copy()
@@ -1016,7 +948,7 @@ class GUI:
                 if stream_count < self._ik_warmup_samples:
                     joints = self._last_valid_joints.copy()
                 else:
-                    joints = self._pose_to_joint_angles(position, orientation)
+                    joints = self._pose_to_joint_angles(position)
                     if joints is not None:
                         self._last_valid_joints = joints.copy()
                     else:
@@ -1138,8 +1070,8 @@ class GUI:
     def update_plots(self, frame):
         with self.state_lock:
             lt = list(self.live_t)
+            lx = list(self.live_x)
             ly = list(self.live_y)
-            lz = list(self.live_z)
 
             traj_ready = self.trajectory_ready
             replay_enabled = self.replay_enabled
@@ -1151,14 +1083,14 @@ class GUI:
             t0 = lt[0]
             tp = [x - t0 for x in lt]
 
+            self.line_live_x.set_data(tp, lx)
             self.line_live_y.set_data(tp, ly)
-            self.line_live_z.set_data(tp, lz)
 
             xmin = tp[0]
             xmax = tp[-1] if tp[-1] > 1.0 else 1.0
             self.ax_live.set_xlim(xmin, xmax)
 
-            vals = ly + lz
+            vals = lx + ly
             ymin = min(vals)
             ymax = max(vals)
             if ymin == ymax:
@@ -1166,8 +1098,8 @@ class GUI:
                 ymax += 0.1
             self.ax_live.set_ylim(ymin - 0.05, ymax + 0.05)
         else:
+            self.line_live_x.set_data([], [])
             self.line_live_y.set_data([], [])
-            self.line_live_z.set_data([], [])
 
         if traj_ready and len(traj_t) >= 2 and len(traj_p) >= 2:
             if replay_enabled:
@@ -1198,8 +1130,8 @@ class GUI:
         self.canvas.draw_idle()
 
         return (
+            self.line_live_x,
             self.line_live_y,
-            self.line_live_z,
             self.traj_line,
             self.traj_point
         )

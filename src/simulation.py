@@ -46,10 +46,10 @@ class EmbeddedSimEnvironment(object):
         while self.shared_state.following_trajectory:
             loop_start = time.time()
 
-            x_measured = self.shared_state.joint_pos
-            x = self.model.DHClassicaltoModified(x_measured).reshape((self.model.n, 1)) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
-            print("curr_state")
-            print(x)
+            # x_measured = self.shared_state.joint_pos
+            # x = self.model.DHClassicaltoModified(x_measured).reshape((self.model.n, 1)) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
+            # print("curr_state")
+            # print(x)
             x = x_vec[:, -1].reshape((self.model.n, 1)) # TODO: REMOVE THIS FOR ACTUAL ROBOT
             # print("2")
             # print(x)
@@ -201,17 +201,16 @@ class EmbeddedSimEnvironment(object):
         ax_xy.grid()
         ax_xy.legend()
 
-        ax_yz = axes[1, 0]
-        ax_yz.set_title("End-Effector YZ (Front View)")
-        ax_yz.plot(ee_pos[1, :], ee_pos[2, :], '-')
-        ax_yz.scatter(ee_pos[1, 0], ee_pos[2, 0], c='green', s=80, zorder=5, label="Start")
-        ax_yz.scatter(ee_pos[1, -1], ee_pos[2, -1], c='red', s=80, zorder=5, label="End")
-        ax_yz.set_xlabel("Y [m]")
-        ax_yz.set_ylabel("Z [m]")
-        ax_yz.axis('equal')
-        ax_yz.invert_xaxis()
-        ax_yz.grid()
-        ax_yz.legend()
+        ax_xz = axes[1, 0]
+        ax_xz.set_title("End-Effector XZ (Front View)")
+        ax_xz.plot(ee_pos[0, :], ee_pos[2, :], '-')
+        ax_xz.scatter(ee_pos[0, 0], ee_pos[2, 0], c='green', s=80, zorder=5, label="Start")
+        ax_xz.scatter(ee_pos[0, -1], ee_pos[2, -1], c='red', s=80, zorder=5, label="End")
+        ax_xz.set_xlabel("X [m]")
+        ax_xz.set_ylabel("Z [m]")
+        ax_xz.axis('equal')
+        ax_xz.grid()
+        ax_xz.legend()
 
         ax_3d = fig.add_subplot(2, 2, 4, projection='3d')
         axes[1, 1].remove()

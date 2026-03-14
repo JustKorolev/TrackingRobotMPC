@@ -22,14 +22,14 @@ from src.ur10e import UR10e
 
 
 class MediaPipeHandTracker:
-    def __init__(self, cam_index=1, y_span_m=0.7, z_span_m=0.4, alpha=0.25):
+    def __init__(self, cam_index=1, x_span_m=0.7, y_span_m=0.5, alpha=0.25):
         self.cam_index = cam_index
 
         # Screen-space spans mapped into robot base-frame motion:
         # screen horizontal -> robot y
         # screen vertical   -> robot z
+        self.x_span_m = x_span_m
         self.y_span_m = y_span_m
-        self.z_span_m = z_span_m
         self.alpha = alpha
 
         self.smoothed_pos = None
@@ -71,7 +71,7 @@ class MediaPipeHandTracker:
         self.smoothed_pos = None
         self.trail_points.clear()
 
-    def normalized_to_scaled_zy(self, x_norm, y_norm):
+    def normalized_to_scaled_xy(self, x_norm, y_norm):
         """
         Webcam frame:
             x_norm: left -> right
@@ -89,9 +89,10 @@ class MediaPipeHandTracker:
         We flip horizontal so moving hand LEFT on the mirrored webcam
         corresponds to +y (left of robot base).
         """
-        y_robot = (0.5 - x_norm) * self.y_span_m
-        z_offset = (0.5 - y_norm) * self.z_span_m
-        return np.array([y_robot, z_offset], dtype=float)
+        x_scaled = (x_norm - 0.5) * self.x_span_m
+        y_scaled = (0.5 - y_norm) * self.y_span_m
+        print(x_scaled, y_scaled)
+        return np.array([x_scaled, y_scaled], dtype=float)
 
     def smooth(self, pos):
         if self.smoothed_pos is None:
@@ -103,7 +104,7 @@ class MediaPipeHandTracker:
     def get_hand_position(self, draw=True):
         """
         Returns:
-            pos_zy: np.array([y_robot, z_offset]) or None
+            pos_xy: np.array([x_scaled, y_scaled]) or None
             frame
         """
         if self.cap is None:
@@ -119,7 +120,7 @@ class MediaPipeHandTracker:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb)
 
-        pos_zy = None
+        smooth_screen_pos_xy = None
         current_px = None
         current_py = None
 
@@ -132,8 +133,8 @@ class MediaPipeHandTracker:
             hand_landmarks = results.multi_hand_landmarks[0]
             finger = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
 
-            raw_pos = self.normalized_to_scaled_zy(finger.x, finger.y)
-            pos_zy = self.smooth(raw_pos)
+            raw_pos = self.normalized_to_scaled_xy(finger.x, finger.y)
+            smooth_screen_pos_xy = self.smooth(raw_pos)
 
             current_px = int(finger.x * w)
             current_py = int(finger.y * h)
@@ -156,7 +157,7 @@ class MediaPipeHandTracker:
 
                 cv2.putText(
                     frame,
-                    f"y={pos_zy[0]:+.3f} m, z_off={pos_zy[1]:+.3f} m",
+                    f"y={smooth_screen_pos_xy[0]:+.3f} m, z_off={smooth_screen_pos_xy[1]:+.3f} m",
                     (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.8,
@@ -192,7 +193,7 @@ class MediaPipeHandTracker:
             )
             cv2.putText(
                 frame,
-                f"Y span = {self.y_span_m:.2f} m | Z span = {self.z_span_m:.2f} m",
+                f"Y span = {self.x_span_m:.2f} m | Z span = {self.y_span_m:.2f} m",
                 (20, h - 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -200,7 +201,7 @@ class MediaPipeHandTracker:
                 2
             )
 
-        return pos_zy, frame
+        return smooth_screen_pos_xy, frame
 
 
 class GUI:
@@ -246,12 +247,12 @@ class GUI:
 
         self.hand_tracker = None
 
-        self.local_y_min = -0.25
-        self.local_y_max = 0.25
-        self.local_z_min = -0.125
-        self.local_z_max = 0.125
+        self.local_x_min = -0.35
+        self.local_x_max = 0.35
+        self.local_y_min = -0.2
+        self.local_y_max = 0.2
 
-        self._last_valid_hand_pos_zy = None
+        self._last_valid_hand_pos_xy = None
 
         self.build_gui()
 
@@ -332,12 +333,12 @@ class GUI:
         self.plot_save_btn.grid(row=3, column=2, padx=5, pady=(10, 0), sticky="w")
 
         ttk.Label(top, text="Local Y Span Clamp (m)").grid(row=4, column=0, sticky="w", pady=(10, 0))
-        self.local_y_limit_var = tk.StringVar(value="0.25")
+        self.local_y_limit_var = tk.StringVar(value="0.35")
         self.local_y_limit_entry = ttk.Entry(top, textvariable=self.local_y_limit_var, width=10)
         self.local_y_limit_entry.grid(row=4, column=1, padx=5, pady=(10, 0), sticky="w")
 
         ttk.Label(top, text="Local Z Span Clamp (m)").grid(row=4, column=2, sticky="w", pady=(10, 0))
-        self.local_z_limit_var = tk.StringVar(value="0.125")
+        self.local_z_limit_var = tk.StringVar(value="0.2")
         self.local_z_limit_entry = ttk.Entry(top, textvariable=self.local_z_limit_var, width=10)
         self.local_z_limit_entry.grid(row=4, column=3, padx=5, pady=(10, 0), sticky="w")
 
@@ -399,7 +400,7 @@ class GUI:
         self.refresh_trajectory_list()
 
     def stop_following_callback(self):
-        self._last_valid_hand_pos_zy = None
+        self._last_valid_hand_pos_xy = None
 
         if self.hand_tracker is not None:
             self.hand_tracker.reset_tracking_state()
@@ -692,32 +693,6 @@ class GUI:
         with self.state_lock:
             self.request_stop = True
 
-    def rotation_matrix(self, roll, pitch, yaw):
-        cr = np.cos(roll)
-        sr = np.sin(roll)
-        cp = np.cos(pitch)
-        sp = np.sin(pitch)
-        cy = np.cos(yaw)
-        sy = np.sin(yaw)
-
-        rx = np.array([
-            [1.0, 0.0, 0.0],
-            [0.0, cr, -sr],
-            [0.0, sr, cr]
-        ])
-        ry = np.array([
-            [cp, 0.0, sp],
-            [0.0, 1.0, 0.0],
-            [-sp, 0.0, cp]
-        ])
-        rz = np.array([
-            [cy, -sy, 0.0],
-            [sy, cy, 0.0],
-            [0.0, 0.0, 1.0]
-        ])
-
-        return rz @ ry @ rx
-
     def set_axes_equal_3d(self, ax, x, y, z):
         if len(x) < 2:
             ax.set_xlim(-1, 1)
@@ -744,6 +719,7 @@ class GUI:
         ax.set_zlim(zmid - r, zmid + r)
 
     def _pose_to_joint_angles(self, position, orientation):
+        # return np.array([0,0,0,0,0,0])
         """
         Ignore orientation for drawing.
 
@@ -767,8 +743,8 @@ class GUI:
         try:
             T = self.local_pose_to_base_transform(position, None)
             T[:3, :3] = utils.rot_x(-np.pi/2 + 0.05)[:3,:3]
-            print("THAT T")
-            print(T)
+            # print("THAT T")
+            # print(T)
 
             candidates = []
             for sol_type in ("elbow_up", "elbow_down", "elbow_up_2", "elbow_down_2"):
@@ -803,8 +779,6 @@ class GUI:
         if self.hand_tracker is None:
             self.hand_tracker = MediaPipeHandTracker(
                 cam_index=0,
-                y_span_m=0.50,
-                z_span_m=0.25,
                 alpha=0.25
             )
         self.hand_tracker.start()
@@ -814,23 +788,23 @@ class GUI:
             y_lim = abs(float(self.local_y_limit_var.get()))
             if y_lim < 1e-6:
                 raise ValueError
-            self.local_y_min = -y_lim
-            self.local_y_max = y_lim
+            self.local_x_min = -y_lim
+            self.local_x_max = y_lim
         except ValueError:
-            self.local_y_min = -0.25
-            self.local_y_max = 0.25
+            self.local_x_min = -0.25
+            self.local_x_max = 0.25
 
         try:
             z_lim = abs(float(self.local_z_limit_var.get()))
             if z_lim < 1e-6:
                 raise ValueError
-            self.local_z_min = -z_lim
-            self.local_z_max = z_lim
+            self.local_y_min = -z_lim
+            self.local_y_max = z_lim
         except ValueError:
-            self.local_z_min = -0.125
-            self.local_z_max = 0.125
+            self.local_y_min = -0.125
+            self.local_y_max = 0.125
 
-    def local_hand_pose_from_tracking(self, pos_zy):
+    def local_hand_pose_from_tracking(self, pos_xy):
         """
         Convert hand tracker output into a LOCAL workspace-frame pose.
 
@@ -838,10 +812,10 @@ class GUI:
         Motion only in local YZ plane.
         local x stays zero.
         """
-        dy = np.clip(pos_zy[0], self.local_y_min, self.local_y_max)
-        dz = np.clip(pos_zy[1], self.local_z_min, self.local_z_max)
+        dx = np.clip(pos_xy[0], self.local_x_min, self.local_x_max)
+        dy = np.clip(pos_xy[1], self.local_y_min, self.local_y_max)
 
-        position_local = np.array([0.0, dy, dz], dtype=float)
+        position_local = np.array([dx, dy, 0.0], dtype=float)
         orientation_local = np.zeros(3, dtype=float)
         return position_local, orientation_local
 
@@ -853,16 +827,21 @@ class GUI:
         Local motion affects only base-frame y and z.
         Base-frame x stays fixed at workspace_offset x.
         """
-        T_base = np.eye(4)
+        position_local_list = position_local.tolist()
+        T_local = utils.pose6_to_T([*position_local_list, 0, 0, 0])
+        T_local_rotated = utils.rot_x(np.pi/2) @ T_local
+        pose_local_rotated = utils.T_to_pose6(T_local_rotated)
+        pose_local_rotated[3:] = np.zeros(3)
 
-        # Ignore orientation entirely for the drawing transform.
-        T_base[:3, :3] = np.eye(3)
+        pose_home = utils.T_to_pose6(self._workspace_offset)
+        pose_target = pose_home + pose_local_rotated
+        T_target = utils.pose6_to_T(pose_target)
 
-        origin_base = self._workspace_offset[:3, 3].copy()
-        disp_base = np.array([position_local[1], 0.0, position_local[2]], dtype=float)
+        # print(pose_home)
+        # print(pose_local_rotated)
+        # print(pose_target)
 
-        T_base[:3, 3] = origin_base + disp_base
-        return T_base
+        return T_target
 
     def local_pose_to_base_position(self, position_local, orientation_local=None):
         T_base = self.local_pose_to_base_transform(position_local, orientation_local)
@@ -955,7 +934,7 @@ class GUI:
             self._stream_thread = None
             return
 
-        self._last_valid_hand_pos_zy = None
+        self._last_valid_hand_pos_xy = None
         self.hand_tracker.reset_tracking_state()
 
         self._read_mapping_settings()
@@ -1000,8 +979,8 @@ class GUI:
                 if pos_zy is None:
                     lost_hand_count += 1
 
-                    if self._last_valid_hand_pos_zy is not None:
-                        pos_zy = self._last_valid_hand_pos_zy.copy()
+                    if self._last_valid_hand_pos_xy is not None:
+                        pos_zy = self._last_valid_hand_pos_xy.copy()
                     else:
                         if self._last_valid_joints is not None:
                             self.shared_state.append_joint_target(self._last_valid_joints.copy(), dt)
@@ -1010,7 +989,7 @@ class GUI:
                             print(f"[STREAM] Hand lost for {lost_hand_count} frames (no prior hand position)")
                         continue
                 else:
-                    self._last_valid_hand_pos_zy = pos_zy.copy()
+                    self._last_valid_hand_pos_xy = pos_zy.copy()
                     lost_hand_count = 0
 
 
@@ -1072,7 +1051,7 @@ class GUI:
             self.set_status(f"Stream error: {e}")
             print(f"[STREAM] Error: {e}")
         finally:
-            self._last_valid_hand_pos_zy = None
+            self._last_valid_hand_pos_xy = None
 
             if self.hand_tracker is not None:
                 self.hand_tracker.reset_tracking_state()

@@ -50,10 +50,18 @@ class MediaPipeHandTracker:
 
     def start(self):
         if self.cap is None:
-            self.cap = cv2.VideoCapture(self.cam_index)
-            if not self.cap.isOpened():
-                self.cap = None
-                raise RuntimeError("Could not open webcam.")
+            candidates = [self.cam_index] + [i for i in range(5) if i != self.cam_index]
+            for idx in candidates:
+                cap = cv2.VideoCapture(idx)
+                if cap.isOpened():
+                    self.cap = cap
+                    self.cam_index = idx
+                    print(f"[CAMERA] Opened camera index {idx}")
+                    return
+                cap.release()
+            raise RuntimeError(
+                f"Could not open any webcam (tried indices {candidates})."
+            )
 
     def stop(self):
         if self.cap is not None:

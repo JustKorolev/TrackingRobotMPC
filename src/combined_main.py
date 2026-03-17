@@ -54,8 +54,8 @@ JOINT_POS_LIMITS = np.array([6.1087, 6.1087, 6.1087, 6.1087, 6.1087, 6.1087])
 MIN_LINK_DISTANCE = 0.05
 
 
-def _cartesian_interp_y_clamped(theta_prev, theta_next, N, robot, workspace_y):
-    """Interpolate in Cartesian space, clamping the Y coordinate at each step.
+def _cartesian_interp_z_clamped(theta_prev, theta_next, N, robot, workspace_z):
+    """Interpolate in Cartesian space, clamping the Z coordinate at each step.
 
     Returns a list of N joint arrays (excluding theta_prev, including
     theta_next), or None if any IK fails or a branch discontinuity is
@@ -76,7 +76,7 @@ def _cartesian_interp_y_clamped(theta_prev, theta_next, N, robot, workspace_y):
     for i in range(1, N + 1):
         alpha = i / N
         pose_interp = (1 - alpha) * pose_prev + alpha * pose_next
-        pose_interp[1] = workspace_y
+        pose_interp[2] = workspace_z
 
         T_interp = pose6_to_T(pose_interp)
 
@@ -100,11 +100,11 @@ def _cartesian_interp_y_clamped(theta_prev, theta_next, N, robot, workspace_y):
 
 
 def interpolate_joint_segment(theta_prev, theta_next, dt, v_max,
-                              robot=None, workspace_y=None):
+                              robot=None, workspace_z=None):
     """Subdivide a joint-space segment so every joint respects its velocity limit.
 
-    When *robot* and *workspace_y* are provided the function first attempts
-    Cartesian-space interpolation with the end-effector Y coordinate clamped,
+    When *robot* and *workspace_z* are provided the function first attempts
+    Cartesian-space interpolation with the end-effector Z coordinate clamped,
     falling back to plain joint-space interpolation on IK failure.
 
     Parameters
@@ -114,7 +114,7 @@ def interpolate_joint_segment(theta_prev, theta_next, dt, v_max,
     dt          : float, timestep between the two points
     v_max       : (6,) per-joint velocity limits (rad/s)
     robot       : UR10e instance (optional, enables Cartesian interpolation)
-    workspace_y : float (optional, desired Y in base frame)
+    workspace_z : float (optional, desired Z in base frame)
 
     Returns
     -------
@@ -137,10 +137,10 @@ def interpolate_joint_segment(theta_prev, theta_next, dt, v_max,
     if N == 1:
         return [theta_next]
 
-    if robot is not None and workspace_y is not None:
+    if robot is not None and workspace_z is not None:
         try:
-            cart_pts = _cartesian_interp_y_clamped(
-                theta_prev, theta_next, N, robot, workspace_y
+            cart_pts = _cartesian_interp_z_clamped(
+                theta_prev, theta_next, N, robot, workspace_z
             )
             if cart_pts is not None:
                 return cart_pts
@@ -192,9 +192,9 @@ class SharedTrajectoryState:
         from src.ur10e import UR10e
         self._collision_robot = UR10e()
         self.home_joints = self._collision_robot.IK("elbow_up_2", WORKSPACE_OFFSET)
-        self._workspace_y = float(WORKSPACE_OFFSET[1, 3])
+        self._workspace_z = float(WORKSPACE_OFFSET[2, 3])
         print(f"[HOME] Home joints (deg): {np.degrees(self.home_joints).round(1)}")
-        print(f"[HOME] Workspace Y (clamped): {self._workspace_y:.4f} m")
+        print(f"[HOME] Workspace Z (clamped): {self._workspace_z:.4f} m")
 
         self._last_joint_target = None
 
@@ -277,7 +277,7 @@ class SharedTrajectoryState:
             else:
                 points = interpolate_joint_segment(
                     self._last_joint_target, theta_next, dt, JOINT_VEL_LIMITS,
-                    robot=self._collision_robot, workspace_y=self._workspace_y
+                    robot=self._collision_robot, workspace_z=self._workspace_z
                 )
 
                 if len(points) > 1:

@@ -772,7 +772,7 @@ class GUI:
         """
         position_local_list = position_local.tolist()
         T_local = utils.pose6_to_T([*position_local_list, 0, 0, 0])
-        T_local_rotated = utils.rot_x(np.pi/2) @ T_local
+        T_local_rotated = T_local
         pose_local_rotated = utils.T_to_pose6(T_local_rotated)
         pose_local_rotated[3:] = np.zeros(3)
 

@@ -78,12 +78,14 @@ class EmbeddedSimEnvironment(object):
         while self.shared_state.following_trajectory:
             loop_start = time.time()
 
-            # x_measured = self.shared_state.joint_pos
-            # x = self.model.DHClassicaltoModified(x_measured).reshape((self.model.n, 1)) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
-            # print("curr_state")
-            # print(x)
-            x = x_vec[:, -1].reshape((self.model.n, 1)) # TODO: REMOVE THIS FOR ACTUAL ROBOT
-            # print("2")
+            x_measured = np.array(self.shared_state.joint_pos)
+            if x_measured is None:
+                continue
+            x = self.model.DHClassicaltoModified(x_measured).reshape((self.model.n, 1)) # TODO: UNCOMMENT THIS FOR ACTUAL ROBOT
+            print("curr_state")
+            print(x)
+            # x = x_vec[:, -1].reshape((self.model.n, 1)) # TODO: REMOVE THIS FOR ACTUAL ROBOT
+            # print("predicted_state")
             # print(x)
             u, error = self.controller(x, self.ran_iterations * self.dt, prerecorded=self.shared_state.prerecorded_flag)
 

@@ -21,7 +21,7 @@ except ImportError:
 
 # TODO: MODIFY ALL THE PARAMETERS BELOW BEFORE TESTING
 SAMPLING_RATE = 50 # Hz
-MPC_HORIZON = SAMPLING_RATE // 3 # sec = horizon_samples / sampling_rate
+MPC_HORIZON = SAMPLING_RATE // 6 # sec = horizon_samples / sampling_rate
 # The workspace offset MUST place the robot away from wrist singularities.
 # [0.5, 0.5, 0.5, 0, 0, 0] has zero rotation which aligns wrist axes (singular).
 # Adding a small rotation breaks the singularity and makes IK stable.
@@ -32,8 +32,8 @@ WORKSPACE_OFFSET = pose6_to_T([0, -0.8, 0.6, np.pi/2, 0.05, 0.05])
 #   Joints 0-1 (base, shoulder): 2.094 rad/s  (120 deg/s)
 #   Joints 2-5 (elbow, wrists):  3.142 rad/s  (180 deg/s)
 # Working limits (conservative for safety):
-VJ = 0.4   # rad/s  -- uniform working velocity limit for MPC
-AJ = 0.7   # rad/s² -- uniform working acceleration limit for MPC
+VJ = 0.8   # rad/s  -- uniform working velocity limit for MPC
+AJ = 1   # rad/s² -- uniform working acceleration limit for MPC
 
 # Per-joint working velocity limits (rad/s).
 # UPDATE THESE when you know exact per-joint limits for your setup.
@@ -180,6 +180,7 @@ class SharedTrajectoryState:
         self.shutdown = False
         self.joint_pos = None
         self.home_requested = False
+        self.homing = False
         self.collision_detected = False
         self.collision_reason = ""
         self.prerecorded_flag = False
@@ -312,6 +313,7 @@ class SharedTrajectoryState:
     def request_home(self):
         with self.lock:
             self.home_requested = True
+            self.homing = True
             self.following_trajectory = False
             self.robot_enabled = True
             print(f"[HOME] Homing to {np.degrees(self.home_joints).round(1)} deg")

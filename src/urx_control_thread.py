@@ -41,9 +41,10 @@ class URXControlThread(threading.Thread):
                 # print("joint angles")
                 # print(self.shared_state.joint_pos)
                 modified_joint_pos = self.robot_model.DHClassicaltoModified(self.shared_state.joint_pos)
-                print(np.linalg.norm(modified_joint_pos - self.shared_state.home_joints))
+                # print(np.linalg.norm(modified_joint_pos - self.shared_state.home_joints))
                 if np.linalg.norm(modified_joint_pos - self.shared_state.home_joints) < 1e-2:
-                    print("Homed")
+                    if self.shared_state.homing:
+                        self.shared_state.homing = False
                 
                 with self.shared_state.lock:
                     shutdown = self.shared_state.shutdown
@@ -106,11 +107,14 @@ class URXControlThread(threading.Thread):
                             break
                         
                         self.send_command(u_curr)
+                    else:
+                        if not self.shared_state.homing:
+                            self.send_zero()
                 except Exception as e:
                     print(f"[URX] Command error: {e}")
                     self.send_zero()
                     time.sleep(0.1)
-
+                    
                 time.sleep(self.dt)
 
         except Exception as e:
@@ -151,7 +155,6 @@ class URXControlThread(threading.Thread):
         )
 
     def send_zero(self):
-        print("sending zero")
         if self.robot is not None:
             self.robot.speedj([0, 0, 0, 0, 0, 0], acc=self.aj, min_time=0.35)
 

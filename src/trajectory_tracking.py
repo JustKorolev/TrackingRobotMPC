@@ -52,9 +52,10 @@ class MPCSimulationThread(threading.Thread):
 
             self.results = {'t': t, 'y': y, 'u': u, 'env': sim_env_tracking}
             self.status = "completed"
-            sim_env_tracking.visualize()
-            sim_env_tracking.visualize_error()
-            sim_env_tracking.visualize_end_effector()
+            graph_number = np.random.randint(1, 1000)
+            sim_env_tracking.visualize(graph_number)
+            sim_env_tracking.visualize_error(graph_number)
+            sim_env_tracking.visualize_end_effector(graph_number)
             print("[MPC Thread] Simulation completed successfully!")
 
         except Exception as e:

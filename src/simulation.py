@@ -138,7 +138,7 @@ class EmbeddedSimEnvironment(object):
         self.e_vec = e_vec
         return t, x_vec, u_vec
 
-    def visualize(self):
+    def visualize(self, number):
         """
         Offline plotting of simulation data for UR10e joint-space model.
         State: q in R^6
@@ -176,9 +176,9 @@ class EmbeddedSimEnvironment(object):
         ax2.legend()
 
         plt.tight_layout()
-        plt.savefig("./tracking_diagnosis/diagnosis.png")
+        plt.savefig(f"./tracking_diagnosis/diagnosis{number}.png")
 
-    def visualize_error(self):
+    def visualize_error(self, number):
         """
         Offline plotting of tracking error for UR10e joint-space model.
         Error: q - q_ref in R^6
@@ -216,9 +216,9 @@ class EmbeddedSimEnvironment(object):
         ax2.legend()
 
         plt.tight_layout()
-        plt.savefig(f"./tracking_diagnosis/error_diagnosis.png")
+        plt.savefig(f"./tracking_diagnosis/error_diagnosis{number}.png")
 
-    def visualize_end_effector(self):
+    def visualize_end_effector(self, number):
         """Compute FK for every simulated joint state and plot end-effector XYZ."""
         if self.ran_iterations == 0:
             print("Please run the simulation first with the method 'run'.")
@@ -282,4 +282,4 @@ class EmbeddedSimEnvironment(object):
         ax_3d.legend()
 
         plt.tight_layout()
-        plt.savefig("./tracking_diagnosis/end_effector.png")
+        plt.savefig(f"./tracking_diagnosis/end_effector{number}.png")

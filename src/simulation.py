@@ -4,6 +4,55 @@ import matplotlib.pyplot as plt
 import time
 
 
+def _y_nullspace_project(model, x_mod, u, workspace_y,
+                         k_restore=1.0, y_deadband=0.003,
+                         max_correction=0.15, eps=1e-5):
+    """Minimally modify joint velocity *u* so the end-effector Y velocity
+    becomes ``-k_restore * (y_cur - workspace_y)`` instead of whatever the
+    MPC produced.  This both prevents new Y drift and corrects existing drift.
+
+    A deadband avoids jitter when Y is already close to the target, and
+    the correction magnitude is capped for stability on the real robot.
+    """
+    x_mod = np.asarray(x_mod, dtype=float).reshape(6,)
+    u_flat = np.asarray(u, dtype=float).flatten()
+
+    theta_class_deg = np.rad2deg(model.DHModifiedToClassical(x_mod))
+    T_ref = model.FK(theta_class_deg)
+    y_cur = T_ref[1, 3]
+
+    y_err = y_cur - workspace_y
+
+    J_y = np.zeros(6)
+    for i in range(6):
+        x_pert = x_mod.copy()
+        x_pert[i] += eps
+        theta_pert_deg = np.rad2deg(model.DHModifiedToClassical(x_pert))
+        T_pert = model.FK(theta_pert_deg)
+        J_y[i] = (T_pert[1, 3] - y_cur) / eps
+
+    J_y_norm_sq = np.dot(J_y, J_y)
+    if J_y_norm_sq < 1e-10:
+        return u
+
+    vy_current = np.dot(J_y, u_flat)
+
+    if abs(y_err) < y_deadband:
+        vy_desired = 0.0
+    else:
+        vy_desired = -k_restore * y_err
+
+    correction_scale = (vy_desired - vy_current) / J_y_norm_sq
+    correction = J_y * correction_scale
+
+    corr_norm = np.linalg.norm(correction)
+    if corr_norm > max_correction:
+        correction *= max_correction / corr_norm
+
+    u_proj = u_flat + correction
+    return u_proj.reshape(np.asarray(u).shape)
+
+
 class EmbeddedSimEnvironment(object):
 
     def __init__(self, model, dynamics, controller, time=100.0, shared_state=None):
@@ -56,6 +105,13 @@ class EmbeddedSimEnvironment(object):
             # print("predicted_state")
             # print(x)
             u, error = self.controller(x, self.ran_iterations * self.dt, prerecorded=self.shared_state.prerecorded_flag)
+
+            if hasattr(self.shared_state, '_workspace_y'):
+                u = _y_nullspace_project(
+                    self.model, x.flatten(), u,
+                    self.shared_state._workspace_y
+                )
+
             x_next = self.dynamics(x, u)
 
             with self.shared_state.lock:

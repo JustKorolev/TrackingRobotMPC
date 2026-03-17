@@ -327,6 +327,8 @@ class SharedTrajectoryState:
 
     def start_following(self):
         with self.lock:
+            self.collision_detected = False
+            self.collision_reason = ""
             self.trajectory_queue = deque()
             self.following_trajectory = True
             self.robot_enabled = True

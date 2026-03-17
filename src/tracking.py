@@ -44,7 +44,7 @@ class MediaPipeHandTracker:
             static_image_mode=False,
             max_num_hands=1,
             model_complexity=1,
-            min_detection_confidence=0.6,
+            min_detection_confidence=0.75,
             min_tracking_confidence=0.6
         )
 

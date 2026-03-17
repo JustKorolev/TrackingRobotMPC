@@ -99,17 +99,19 @@ class URXControlThread(threading.Thread):
                         
                         # print("FKIN")
                         # print(self.robot_model.FK(np.rad2deg(curr_joints)))
-                        print(u_curr)
+                        # print(u_curr)
                         
                         if not safe:
                             shutdown = True
                             print("NOT SAFE, ABORTING")
                             break
                         
-                        self.send_command(u_curr)
-                    else:
-                        if not self.shared_state.homing:
-                            self.send_zero()
+                        if self.shared_state.following_trajectory:
+                            self.send_command(u_curr)
+                        else:
+                            self.send_zero()    
+                        
+                        
                 except Exception as e:
                     print(f"[URX] Command error: {e}")
                     self.send_zero()
@@ -151,12 +153,12 @@ class URXControlThread(threading.Thread):
         self.robot.speedj(
             joint_vels.tolist(),
             acc=self.aj,
-            min_time=0.35
+            min_time=0.4
         )
 
     def send_zero(self):
         if self.robot is not None:
-            self.robot.speedj([0, 0, 0, 0, 0, 0], acc=self.aj, min_time=0.35)
+            self.robot.speedj([0, 0, 0, 0, 0, 0], acc=self.aj, min_time=0.4)
 
     def stop(self):
         self.running = False

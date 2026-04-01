@@ -4,6 +4,8 @@ A comprehensive system for intuitive human-robot interaction that enables real-t
 
 ## Overview
 
+![Demo](./videos/demo.gif)
+
 This project demonstrates advanced trajectory generation and control techniques for robotic systems, featuring:
 
 - **Real-time hand tracking** using MediaPipe computer vision
@@ -164,27 +166,18 @@ The system supports trajectory recording for repeatable motion sequences:
 ## Example Output Plots
 
 ### End-Effector Trajectory Tracking
-*[Placeholder for trajectory tracking plots showing reference vs. actual end-effector motion]*
+![Diagram](./tracking_diagnosis/end_effector415.png)
 
 ### Joint State Evolution
-*[Placeholder for joint angle and velocity plots demonstrating smooth motion profiles]*
+![Diagram](./tracking_diagnosis/diagnosis415.png)
 
 ### MPC Tracking Performance
-*[Placeholder for tracking error plots showing controller performance metrics]*
-
-### Safety System Validation
-*[Placeholder for collision avoidance demonstration plots]*
+![Diagram](./tracking_diagnosis/error_diagnosis415.png)
 
 ## Video Demonstrations
 
-### Real-Time Hand Tracking Control
-*[Placeholder for video showing live hand-guided robot motion]*
-
-### Drawing Task Execution
-*[Placeholder for video demonstrating whiteboard drawing capabilities]*
-
-### Safety System Response
-*[Placeholder for video showing collision avoidance and emergency stop functionality]*
+### Real-Time Hand Tracking Control and Drawing
+![Watch Demo](./videos/demo.MP4)
 
 ## Technical Achievements
 
